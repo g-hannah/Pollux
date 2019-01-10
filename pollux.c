@@ -96,7 +96,51 @@ main(int argc, char *argv[])
 {
 	static char		c;
 	static int		i;
-
+	
+	while ((c = getopt(argc, argv, "hs:H:No:")) != -1)
+	  {
+		switch(c)
+		  {
+			case(0x68):
+			usage();
+			break;
+			case(0x73):
+			if (path == NULL)
+			  {
+				if (!(path = (char *)calloc(1024, sizeof(char))))
+					pe("main() > calloc()");
+			  }
+			strncpy(path, optarg, strlen(optarg));
+			path[strlen(optarg)] = 0;
+			break;
+			case(0x48):
+			if (strncmp("md5", optarg, 3) == 0)
+				HASH_TYPE = __MD5;
+			else if (strncmp("sha1", optarg, 4) == 0)
+				HASH_TYPE = __SHA1;
+			else if (strncmp("sha256", optarg, 6) == 0)
+				HASH_TYPE = __SHA256;
+			else if (strncmp("sha384", optarg, 6) == 0)
+				HASH_TYPE = __SHA384;
+			else if (strncmp("sha512", optarg, 6) == 0)
+				HASH_TYPE = __SHA512;
+			else
+				HASH_TYPE = __SHA256;
+			break;
+			case(0x4e):
+			NO_DELETE = 1;
+			break;
+			case(0x6f):
+			outfile = optarg;
+			break;
+			case(0x3f):
+			usage();
+			break;
+			default:
+			usage();
+		  }
+	  }
+	
 	if (get_options(argc, argv) != 0)
 		pe("main() > get_options()");
 	printf(
