@@ -1,5 +1,5 @@
-#ifndef __HASHLIB
-#define __HASHLIB
+#ifndef __HASHLIB_H
+#define __HASHLIB_H   1
 
 #include <fcntl.h>
 #include <misclib.h> // custom lib
