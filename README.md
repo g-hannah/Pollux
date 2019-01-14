@@ -10,7 +10,7 @@ Do the following (linux-based kernels) to set them up:
 
 ```
 gcc -c -Wall -Werror -fPIC nameoflib.c
-gcc -shared -o libnameoflib.so .o
+gcc -shared -o libnameoflib.so nameoflib.o
 sudo cp libnameoflib.so /usr/lib/libnameoflib.so
 sudo chmod 755 /usr/lib/libnameoflib.so
 sudo ldconfig
