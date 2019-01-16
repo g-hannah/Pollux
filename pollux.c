@@ -97,6 +97,7 @@ main(int argc, char *argv[])
 	static char		c;
 	static int		i;
 	
+	opt_err = 0;
 	while ((c = getopt(argc, argv, "hs:H:No:")) != -1)
 	  {
 		switch(c)
