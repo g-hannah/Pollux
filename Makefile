@@ -4,7 +4,7 @@ OFILES=pollux.o
 LIBS=-lcrypto -lhashlib -lmisclib
 
 pollux: $(OFILES)
-	$(CC) -o pollux $(OFILES) $(LIBS)
+	$(CC) -g -o pollux $(OFILES) $(LIBS)
 
 $(OFILES): $(CFILES)
 	$(CC) -c $(CFILES)
