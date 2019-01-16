@@ -97,51 +97,6 @@ main(int argc, char *argv[])
 	static char		c;
 	static int		i;
 	
-	opt_err = 0;
-	while ((c = getopt(argc, argv, "hs:H:No:")) != -1)
-	  {
-		switch(c)
-		  {
-			case(0x68):
-			usage();
-			break;
-			case(0x73):
-			if (path == NULL)
-			  {
-				if (!(path = (char *)calloc(1024, sizeof(char))))
-					pe("main() > calloc()");
-			  }
-			strncpy(path, optarg, strlen(optarg));
-			path[strlen(optarg)] = 0;
-			break;
-			case(0x48):
-			if (strncmp("md5", optarg, 3) == 0)
-				HASH_TYPE = __MD5;
-			else if (strncmp("sha1", optarg, 4) == 0)
-				HASH_TYPE = __SHA1;
-			else if (strncmp("sha256", optarg, 6) == 0)
-				HASH_TYPE = __SHA256;
-			else if (strncmp("sha384", optarg, 6) == 0)
-				HASH_TYPE = __SHA384;
-			else if (strncmp("sha512", optarg, 6) == 0)
-				HASH_TYPE = __SHA512;
-			else
-				HASH_TYPE = __SHA256;
-			break;
-			case(0x4e):
-			NO_DELETE = 1;
-			break;
-			case(0x6f):
-			outfile = optarg;
-			break;
-			case(0x3f):
-			usage();
-			break;
-			default:
-			usage();
-		  }
-	  }
-	
 	if (get_options(argc, argv) != 0)
 		pe("main() > get_options()");
 	printf(
@@ -574,7 +529,8 @@ get_options(int _argc, char *_argv[])
 
 	for (i = 1; i < _argc; ++i)
 	  {
-		if (strncmp("--blacklist", _argv[i], 11) == 0)
+		if ((strncmp("--blacklist", _argv[i], 11) == 0) ||
+		    (strncmp("-B", _argv[i], 2) == 0))
 		  {
 			blist_on = 1;
 			bidx &= ~bidx;
@@ -596,7 +552,8 @@ get_options(int _argc, char *_argv[])
 			BLACKLIST[bidx] = NULL;
 			i = (j-1);
 		  }
-		else if (strncmp("--start", _argv[i], 7) == 0)
+		else if ((strncmp("--start", _argv[i], 7) == 0) ||
+			 (strncmp("-s", _argv[i], 2) == 0))
 		  {
 			if (path == NULL)
 				if (!(path = (char *)calloc(1024, sizeof(char))))
@@ -605,16 +562,19 @@ get_options(int _argc, char *_argv[])
 			strncpy(path, _argv[i], strlen(_argv[i]));
 			path[strlen(_argv[i])] = 0;
 		  }
-		else if (strncmp("--nodelete", _argv[i], 10) == 0)
+		else if ((strncmp("--nodelete", _argv[i], 10) == 0) ||
+			  strncmp("-N", _argv[i], 2) == 0)
 		  {
 			NO_DELETE = 1;
 		  }
-		else if (strncmp("--out", _argv[i], 5) == 0)
+		else if ((strncmp("--out", _argv[i], 5) == 0) ||
+			 (strncmp("-o", _argv[i], 2) == 0))
 		  {
 			++i;
 			outfile = _argv[i];
 		  }
-		else if (strncmp("--hash", _argv[i], 6) == 0)
+		else if ((strncmp("--hash", _argv[i], 6) == 0) ||
+			  strncmp("-H", _argv[i], 2) == 0)
 		  {
 			++i;
 			if (strncmp("md5", _argv[i], 3) == 0)
@@ -630,7 +590,8 @@ get_options(int _argc, char *_argv[])
 			else
 				HASH_TYPE = __SHA256;
 		  }
-		else if (strncmp("--help", _argv[i], 6) == 0)
+		else if ((strncmp("--help", _argv[i], 6) == 0) ||
+			 (strncmp("-h", _argv[i], 2) == 0))
 		  {
 			usage();
 		  }
