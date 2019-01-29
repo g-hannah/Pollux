@@ -7,7 +7,7 @@ pollux: $(OFILES)
 	$(CC) -g -o pollux $(OFILES) $(LIBS)
 
 $(OFILES): $(CFILES)
-	$(CC) -c $(CFILES)
+	$(CC) -g -c $(CFILES)
 
 clean:
 	rm *.o
