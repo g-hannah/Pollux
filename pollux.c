@@ -515,15 +515,25 @@ check_path(char *path)
 }
 
 int
-get_options(int _argc, char *_argv[])
+get_options(int _argc, char *argv[])
 {
 	static char		*p = NULL, *q = NULL;
 	static int		i, j, blist_on, bidx;
+	char			**_argv = NULL;
 
 /* TODO copy args into array with plenty of space in each char array so that
  * we don't get a sigsegv fault with comparing, say, a string that's only 2 bytes long
  * with "--blacklist", etc
  */
+
+	_argv = calloc(_argc, sizeof(char *));
+	for (i = 1; i < _argc; ++i)
+	  {
+		posix_memalign((void **)&_argv[i-1], 16, 64);
+		strncpy(_argv[i-1], argv[i], strlen(argv[i]));
+		_argv[i-1][strlen(argv[i])] = 0;
+	  }
+
 	blist_on = 0;
 	BLIST_SZ = 16;
 	if (!(BLACKLIST = (char **)calloc(BLIST_SZ, sizeof(char *))))
@@ -531,10 +541,10 @@ get_options(int _argc, char *_argv[])
 	for (i = 0; i < BLIST_SZ; ++i)
 		BLACKLIST[i] = NULL;
 
-	for (i = 1; i < _argc; ++i)
+	for (i = 0; i < (_argc-1); ++i)
 	  {
 		if ((strncmp("--blacklist", _argv[i], 11) == 0) ||
-		     (strncpy("-B", _argv[i], 2) == 0))
+		     (strncmp("-B", _argv[i], 2) == 0))
 		  {
 			blist_on = 1;
 			bidx &= ~bidx;
@@ -557,7 +567,7 @@ get_options(int _argc, char *_argv[])
 			i = (j-1);
 		  }
 		else if ((strncmp("--start", _argv[i], 7) == 0) ||
-		     (strncpy("-s", _argv[i], 2) == 0))
+		     (strncmp("-s", _argv[i], 2) == 0))
 		  {
 			if (path == NULL)
 				if (!(path = (char *)calloc(1024, sizeof(char))))
@@ -567,18 +577,18 @@ get_options(int _argc, char *_argv[])
 			path[strlen(_argv[i])] = 0;
 		  }
 		else if ((strncmp("--nodelete", _argv[i], 10) == 0) ||
-		     (strncpy("-N", _argv[i], 2) == 0))
+		     (strncmp("-N", _argv[i], 2) == 0))
 		  {
 			NO_DELETE = 1;
 		  }
 		else if ((strncmp("--out", _argv[i], 5) == 0) ||
-		     (strncpy("-o", _argv[i], 2) == 0))
+		     (strncmp("-o", _argv[i], 2) == 0))
 		  {
 			++i;
 			outfile = _argv[i];
 		  }
 		else if ((strncmp("--hash", _argv[i], 6) == 0) ||
-		     (strncpy("-H", _argv[i], 2) == 0))
+		     (strncmp("-H", _argv[i], 2) == 0))
 		  {
 			++i;
 			if (strncmp("md5", _argv[i], 3) == 0)
@@ -595,7 +605,7 @@ get_options(int _argc, char *_argv[])
 				HASH_TYPE = __SHA256;
 		  }
 		else if ((strncmp("--help", _argv[i], 6) == 0) ||
-		     (strncpy("-h", _argv[i], 2) == 0))
+		     (strncmp("-h", _argv[i], 2) == 0))
 		  {
 			usage();
 		  }
@@ -615,6 +625,17 @@ get_options(int _argc, char *_argv[])
 		strncpy(BLACKLIST[2], "sensible/", 9);
 		strncpy(BLACKLIST[3], "usr/", 4);
 		strncpy(BLACKLIST[4], "etc/", 4);
+	  }
+
+	if (_argv != NULL)
+	  {
+		for (i = 0; i < (_argc - 1); ++i)
+	  	  {
+			if (_argv[i] != NULL)
+			  { free(_argv[i]); _argv[i] = NULL; }
+	  	  }
+		free(_argv);
+		_argv = NULL;
 	  }
 	return(0);
 }
@@ -687,16 +708,19 @@ void
 usage(void)
 {
 	fprintf(stdout,
-		"find_dups [OPTIONS]\n\n"
-		"  --start		specify the starting directory (absolute paths only, no \"./\" allowed)\n"
-		"  --blacklist		specify keywords to blacklist; will not descend into any directories\n"
-		"				containing these keywords (e.g., \"bin\", \"lib\", \"usr\").\n"
-		"  --hash		Specify the hash digest to use\n"
-		"				Choices are \"md5\", \"sha1\", \"sha256\", \"sha384\", \"sha512\"\n"
-		"				(Default is sha256)\n"
-		"  --nodelete		Do not delete any of the duplicates found, simply list them\n"
-		"  --out			Specify output file to print the results to (the default outfile is\n"
-		"				called \"removed_duplicates_\'TIMESTAMP\'.txt\").\n"
-		"  --help		Print this information menu\n");
+		"pollux [OPTIONS]\n\n"
+		"  -s, --start		Specify the starting directory\n"
+		"			 + only absolute paths are permitted because Pollux needs to check the\n"
+		"			 + entire directory path for keywords in order to avoid traversing\n"
+		"			 + into blacklisted directories\n"
+		"  -B, --blacklist	Specify keywords to blacklist; will not descend into any directories\n"
+		"			 + containing these keywords (e.g., \"bin\", \"lib\", \"usr\").\n"
+		"  -H, --hash		Specify the hash digest to use\n"
+		"			 + Choices are \"md5\", \"sha1\", \"sha256\", \"sha384\", \"sha512\"\n"
+		"			 + (Default is sha256)\n"
+		"  -N, --nodelete	Do not delete any of the duplicates found, simply list them\n"
+		"  -o, --out		 + Specify output file to print the results to (the default outfile is\n"
+		"			 + called \"removed_duplicates_\'TIMESTAMP\'.txt\").\n"
+		"  -h, --help		Print this information menu\n");
 	exit(0);
 }
