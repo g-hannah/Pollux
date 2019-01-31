@@ -158,8 +158,23 @@ init(void)
 	  }
 	else
 	  {
-		sprintf((tmp + strlen(tmp)),
-			"/%s", outfile);
+		char		*home = NULL, *p = NULL;
+		int		abs = 0;
+
+		p = outfile;
+		while (p < (outfile + strlen(outfile)))
+		  {
+			if (*p == 0x2f)
+			  { abs = 1; break; }
+			++p;
+		  }
+		if (!abs)
+			sprintf((tmp + strlen(tmp)), "/%s", outfile);
+		else
+		  {
+			memset(tmp, 0, MAXLINE);
+			strncpy(tmp, outfile, MAXLINE);
+		  }
 	  }
 	if ((ofd = open(tmp, O_RDWR|O_CREAT|O_TRUNC, S_IRWXU & ~S_IXUSR)) < 0)
 		pe("init() > open(tmp)");
@@ -515,24 +530,10 @@ check_path(char *path)
 }
 
 int
-get_options(int _argc, char *argv[])
+get_options(int _argc, char *_argv[])
 {
 	static char		*p = NULL, *q = NULL;
 	static int		i, j, blist_on, bidx;
-	char			**_argv = NULL;
-
-/* TODO copy args into array with plenty of space in each char array so that
- * we don't get a sigsegv fault with comparing, say, a string that's only 2 bytes long
- * with "--blacklist", etc
- */
-
-	_argv = calloc(_argc, sizeof(char *));
-	for (i = 1; i < _argc; ++i)
-	  {
-		posix_memalign((void **)&_argv[i-1], 16, 64);
-		strncpy(_argv[i-1], argv[i], strlen(argv[i]));
-		_argv[i-1][strlen(argv[i])] = 0;
-	  }
 
 	blist_on = 0;
 	BLIST_SZ = 16;
@@ -541,7 +542,7 @@ get_options(int _argc, char *argv[])
 	for (i = 0; i < BLIST_SZ; ++i)
 		BLACKLIST[i] = NULL;
 
-	for (i = 0; i < (_argc-1); ++i)
+	for (i = 0; i < _argc; ++i)
 	  {
 		if ((strncmp("--blacklist", _argv[i], 11) == 0) ||
 		     (strncmp("-B", _argv[i], 2) == 0))
@@ -627,16 +628,6 @@ get_options(int _argc, char *argv[])
 		strncpy(BLACKLIST[4], "etc/", 4);
 	  }
 
-	if (_argv != NULL)
-	  {
-		for (i = 0; i < (_argc - 1); ++i)
-	  	  {
-			if (_argv[i] != NULL)
-			  { free(_argv[i]); _argv[i] = NULL; }
-	  	  }
-		free(_argv);
-		_argv = NULL;
-	  }
 	return(0);
 }
 
