@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
+//#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -58,7 +58,7 @@ enum HASHTYPE
 //static char		*start_dir = NULL;
 static char		*path = NULL;
 static unsigned char	*BLOCK = NULL;
-static struct winsize	WS;
+//static struct winsize	WS;
 static int		ofd, ndups, skipped_num;
 static char		*tmp = NULL, *outfile = NULL;
 static time_t		start, end;
@@ -67,6 +67,7 @@ static char		time_str[50];
 
 static char		**BLACKLIST = NULL;
 static int		BLIST_SZ, NO_DELETE = 0, HASH_TYPE = __SHA256;
+static int		QUIET = 0;
 
 struct DIGEST
 {
@@ -99,6 +100,18 @@ main(int argc, char *argv[])
 	
 	if (get_options(argc, argv) != 0)
 		pe("main() > get_options()");
+
+	if (QUIET)
+	  {
+		int		dfd;
+
+		if ((dfd = open("/dev/null", O_RDWR)) < 0)
+			pe("main() > open()");
+		if (STDOUT_FILENO != dfd)
+			dup2(dfd, STDOUT_FILENO);
+		close(dfd);
+	  }
+
 	printf(
 		"starting scan on %s in directory \"%s\"\n"
 		"using hash \"%s\" to fingerprint files\n"
@@ -110,7 +123,6 @@ main(int argc, char *argv[])
 		(NO_DELETE?"on":"off"));
 	for (i = 0; BLACKLIST[i] != NULL; ++i)
 		printf("[%d] \"%s\"\n", (i+1), BLACKLIST[i]);
-		
 	init();
 	find_files(path);
 	time(&end);
@@ -148,9 +160,9 @@ init(void)
 	root->n = NULL;
 	root->d = NULL;
 
-	memset(&WS, 0, sizeof(WS));
-	if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &WS) < 0)
-		pe("init() > ioctl()");
+	/*if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &WS) < 0)
+		pe("init() > ioctl()");*/
+
 	if (outfile == NULL)
 	  {
 		sprintf((tmp + strlen(tmp)),
@@ -178,6 +190,13 @@ init(void)
 	  }
 	if ((ofd = open(tmp, O_RDWR|O_CREAT|O_TRUNC, S_IRWXU & ~S_IXUSR)) < 0)
 		pe("init() > open(tmp)");
+
+	if (QUIET)
+	  {
+		if (STDERR_FILENO != ofd)
+			dup2(ofd, STDERR_FILENO);
+	  }
+
 	ndups &= ~ndups;
 	skipped_num &= ~skipped_num;
 	time(&start);
@@ -261,20 +280,6 @@ find_files(char *fpath)
 	*(fpath + n_sv) = 0;
 	return(0);
 }
-
-/*int
-find_dups(char *dir)
-{
-	static char		*BLOCK = NULL;
-
-	if (!(dp = opendir(dir)))
-		pe("find_dups() > opendir()");
-
-	while ((dinf = readdir(dp)) != NULL)
-	  {
-		
-	  }
-}*/
 
 int
 get_hash(char *_FILE)
@@ -429,7 +434,10 @@ insert_hash(char *hash, char *fname, struct DIGEST *n)
 	else if (strncmp(hash, n->d, hsz) == 0) // duplicate
 	  {
 		++ndups;
-		printf(
+
+		printf("%s and %s both have hash digest %s\n",
+			fname, n->n, hash);
+		/*printf(
 			"%10s %s\"%.*s%s\"\e[m\n"
 			"                and\n"
 			"           %s\"%.*s%s\"\e[m\n"
@@ -438,16 +446,19 @@ insert_hash(char *hash, char *fname, struct DIGEST *n)
 			(strlen(fname)>(WS.ws_col-CUSHION)?"...":""),
 			DUPCOL, (int)(WS.ws_col - CUSHION), n->n,
 			(strlen(n->n)>(WS.ws_col-CUSHION)?"...":""),
-			"[HASH]", HASHCOL, hash);
+			"[HASH]", HASHCOL, hash);*/
 
 		sprintf(tmp,
+			"%s and %s both have hash digest %s\n",
+			fname, n->n, hash);
+		/*sprintf(tmp,
 			"%10s \"%s\"\n"
 			"            and\n"
 			"          \"%s\"\n"
 			"%10s %s\n",
 			"[DUP]", fname,
 			n->n,
-			"[HASH]", hash);
+			"[HASH]", hash);*/
 		write_n(ofd, tmp, strlen(tmp));
 
 		if (!NO_DELETE)
@@ -455,12 +466,14 @@ insert_hash(char *hash, char *fname, struct DIGEST *n)
 			if (strlen(fname) > strlen(n->n))
 		  	  {
 				unlink(n->n);
-				printf("%10s %s\"%.*s%s\"\e[m\n\n",
+				printf("removed %s\n", n->n);
+				sprintf(tmp, "removed %s\n", n->n);
+				/*printf("%10s %s\"%.*s%s\"\e[m\n\n",
 					"[REMOVED]", DUPCOL, (int)(WS.ws_col - CUSHION), n->n,
 					(strlen(n->n)>(WS.ws_col-CUSHION)?"...":""));
 				sprintf(tmp,
 					"%10s \"%s\"\n",
-					"[REMOVED]", n->n);
+					"[REMOVED]", n->n);*/
 				write_n(ofd, tmp, strlen(tmp));
 				if ((n->n = realloc(n->n, strlen(fname)+1)) == NULL)
 					return(-2);
@@ -470,12 +483,14 @@ insert_hash(char *hash, char *fname, struct DIGEST *n)
 			else
 		  	  {
 				unlink(fname);
-				printf("%10s %s\"%.*s%s\"\e[m\n\n",
+				printf("removed %s\n", fname);
+				sprintf(tmp, "removed %s\n", fname);
+				/*printf("%10s %s\"%.*s%s\"\e[m\n\n",
 					"[REMOVED]", DUPCOL, (int)(WS.ws_col - CUSHION), fname,
 					(strlen(fname)>(WS.ws_col-CUSHION)?"...":""));
 				sprintf(tmp,
 					"%10s \"%s\"\n",
-					"[REMOVED]", fname);
+					"[REMOVED]", fname);*/
 				write_n(ofd, tmp, strlen(tmp));
 		  	  }
 		  }
@@ -550,7 +565,9 @@ get_options(int _argc, char *_argv[])
 			blist_on = 1;
 			bidx &= ~bidx;
 			j = (i+1);
-			while (j < _argc && (strstr(_argv[j], "--") == NULL))
+			while (j < _argc &&
+				(strncmp("--", _argv[j], 2) != 0) &&
+				(strncmp("-", _argv[j], 1) != 0))
 			  {
 				if (!(BLACKLIST[bidx] = (char *)calloc(strlen(_argv[j])+1, sizeof(char))))
 					return(-1);
@@ -609,6 +626,11 @@ get_options(int _argc, char *_argv[])
 		     (strncmp("-h", _argv[i], 2) == 0))
 		  {
 			usage();
+		  }
+		else if ((strncmp("--quiet", _argv[i], 7) == 0) ||
+		     (strncmp("-q", _argv[i], 2) == 0))
+		  {
+			QUIET = 1;
 		  }
 	  }
 
@@ -712,6 +734,7 @@ usage(void)
 		"  -N, --nodelete	Do not delete any of the duplicates found, simply list them\n"
 		"  -o, --out		 + Specify output file to print the results to (the default outfile is\n"
 		"			 + called \"removed_duplicates_\'TIMESTAMP\'.txt\").\n"
+		"  -q, --quiet		Do not print anything to stdout\n"
 		"  -h, --help		Print this information menu\n");
 	exit(0);
 }
