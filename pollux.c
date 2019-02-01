@@ -712,7 +712,7 @@ get_time_str(void)
 	time(&seed);
 	if ((localtime_r(&seed, &TIME)) == NULL)
 		return(NULL);
-	if (strftime(time_str, 50, "%a, %d %b %Y %H:%M:%S", &TIME) < 0)
+	if (strftime(time_str, 50, "%a, %d %b %Y %H:%M:%S %z %Z", &TIME) < 0)
 		return(NULL);
 	return(time_str);
 }
