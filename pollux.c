@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-//#include <sys/ioctl.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -17,6 +17,16 @@
 #define DUPCOL		"\e[38;5;124m"
 #define HASHCOL		"\e[38;5;2m"
 #define CUSHION		24
+
+enum R_STATUS
+{
+	P_NOERR,
+#define P_NOERR P_NOERR
+	P_PATH,
+#define P_PATH P_PATH
+	P_BLACKLIST
+#define P_BLACKLIST P_BLACKLIST
+};
 
 #define pe(str)											\
 {												\
@@ -58,7 +68,7 @@ enum HASHTYPE
 //static char		*start_dir = NULL;
 static char		*path = NULL;
 static unsigned char	*BLOCK = NULL;
-//static struct winsize	WS;
+static struct winsize	WS;
 static int		ofd, ndups, skipped_num;
 static char		*tmp = NULL, *outfile = NULL;
 static time_t		start, end;
@@ -97,6 +107,7 @@ main(int argc, char *argv[])
 {
 	static char		c;
 	static int		i;
+	static int		R;
 	
 	if (get_options(argc, argv) != 0)
 		pe("main() > get_options()");
@@ -113,10 +124,10 @@ main(int argc, char *argv[])
 	  }
 
 	printf(
-		"starting scan on %s in directory \"%s\"\n"
-		"using hash \"%s\" to fingerprint files\n"
-		"--nodelete flag is %s\n"
-		"blacklisted keywords in search paths:\n",
+		"+ Starting scan on %s in directory \"%s\"\n"
+		"+ Using hash \"%s\" to fingerprint files\n"
+		"+ 'nodelete' flag is %s\n"
+		"+ Blacklisted keywords in search paths:\n",
 		get_time_str(),
 		path,
 		get_hash_name(HASH_TYPE),
@@ -124,10 +135,14 @@ main(int argc, char *argv[])
 	for (i = 0; BLACKLIST[i] != NULL; ++i)
 		printf("[%d] \"%s\"\n", (i+1), BLACKLIST[i]);
 	init();
-	find_files(path);
+	if ((R = find_files(path)) != P_NOERR)
+	  {
+		time(&end);
+		fprintf(stderr, "Scan halted at %ld seconds\n", (end - start));
+		exit(EXIT_FAILURE);
+	  }
 	time(&end);
-	sprintf(tmp, "\nTIME ELAPSED: %ld seconds\n",
-		((end - start)/1000000000UL));
+	sprintf(tmp, "\nTIME ELAPSED: %ld seconds\n", (end - start));
 	write_n(ofd, tmp, strlen(tmp));
 	sprintf(tmp, "\n# DUPLICATE FILES: %d\n", ndups);
 	write_n(ofd, tmp, strlen(tmp));
@@ -160,8 +175,8 @@ init(void)
 	root->n = NULL;
 	root->d = NULL;
 
-	/*if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &WS) < 0)
-		pe("init() > ioctl()");*/
+	if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &WS) < 0)
+		pe("init() > ioctl()");
 
 	if (outfile == NULL)
 	  {
@@ -261,9 +276,9 @@ find_files(char *fpath)
 		
 
 		r = check_path(fpath);
-		if (r == -2)
-			return(-1);
-		else if (r == -1)
+		if (r == P_PATH)
+			return(P_PATH);
+		else if (r == P_BLACKLIST)
 			continue;
 
 		if (S_ISREG(statb.st_mode))
@@ -278,7 +293,7 @@ find_files(char *fpath)
 		  }
 	  }
 	*(fpath + n_sv) = 0;
-	return(0);
+	return(P_NOERR);
 }
 
 int
@@ -435,9 +450,9 @@ insert_hash(char *hash, char *fname, struct DIGEST *n)
 	  {
 		++ndups;
 
-		printf("%s and %s both have hash digest %s\n",
-			fname, n->n, hash);
-		/*printf(
+		/*printf("%s and %s both have hash digest %s\n",
+			fname, n->n, hash);*/
+		printf(
 			"%10s %s\"%.*s%s\"\e[m\n"
 			"                and\n"
 			"           %s\"%.*s%s\"\e[m\n"
@@ -446,19 +461,19 @@ insert_hash(char *hash, char *fname, struct DIGEST *n)
 			(strlen(fname)>(WS.ws_col-CUSHION)?"...":""),
 			DUPCOL, (int)(WS.ws_col - CUSHION), n->n,
 			(strlen(n->n)>(WS.ws_col-CUSHION)?"...":""),
-			"[HASH]", HASHCOL, hash);*/
+			"[HASH]", HASHCOL, hash);
 
-		sprintf(tmp,
-			"%s and %s both have hash digest %s\n",
-			fname, n->n, hash);
 		/*sprintf(tmp,
+			"%s and %s both have hash digest %s\n",
+			fname, n->n, hash);*/
+		sprintf(tmp,
 			"%10s \"%s\"\n"
 			"            and\n"
 			"          \"%s\"\n"
 			"%10s %s\n",
 			"[DUP]", fname,
 			n->n,
-			"[HASH]", hash);*/
+			"[HASH]", hash);
 		write_n(ofd, tmp, strlen(tmp));
 
 		if (!NO_DELETE)
@@ -466,14 +481,14 @@ insert_hash(char *hash, char *fname, struct DIGEST *n)
 			if (strlen(fname) > strlen(n->n))
 		  	  {
 				unlink(n->n);
-				printf("removed %s\n", n->n);
-				sprintf(tmp, "removed %s\n", n->n);
-				/*printf("%10s %s\"%.*s%s\"\e[m\n\n",
+				/*printf("removed %s\n", n->n);
+				sprintf(tmp, "removed %s\n", n->n);*/
+				printf("%10s %s\"%.*s%s\"\e[m\n\n",
 					"[REMOVED]", DUPCOL, (int)(WS.ws_col - CUSHION), n->n,
 					(strlen(n->n)>(WS.ws_col-CUSHION)?"...":""));
 				sprintf(tmp,
 					"%10s \"%s\"\n",
-					"[REMOVED]", n->n);*/
+					"[REMOVED]", n->n);
 				write_n(ofd, tmp, strlen(tmp));
 				if ((n->n = realloc(n->n, strlen(fname)+1)) == NULL)
 					return(-2);
@@ -483,14 +498,14 @@ insert_hash(char *hash, char *fname, struct DIGEST *n)
 			else
 		  	  {
 				unlink(fname);
-				printf("removed %s\n", fname);
-				sprintf(tmp, "removed %s\n", fname);
-				/*printf("%10s %s\"%.*s%s\"\e[m\n\n",
+				/*printf("removed %s\n", fname);
+				sprintf(tmp, "removed %s\n", fname);*/
+				printf("%10s %s\"%.*s%s\"\e[m\n\n",
 					"[REMOVED]", DUPCOL, (int)(WS.ws_col - CUSHION), fname,
 					(strlen(fname)>(WS.ws_col-CUSHION)?"...":""));
 				sprintf(tmp,
 					"%10s \"%s\"\n",
-					"[REMOVED]", fname);*/
+					"[REMOVED]", fname);
 				write_n(ofd, tmp, strlen(tmp));
 		  	  }
 		  }
@@ -530,18 +545,19 @@ check_path(char *path)
 {
 	static int		i;
 
-	if (strstr(path, "./"))
-	  { printf("\e[48;5;9m\e[38;5;0mAbsolute pathnames ONLY! (no \"./\" allowed)\e[m\n"); return(-2); }
+	if (strncmp("./", path, 2) == 0)
+	// unacceptable -- need to know the full path to apply the blacklist
+	  { printf("\e[48;5;9m\e[38;5;0mAbsolute pathnames ONLY! (no \"./\" allowed)\e[m\n"); return(P_PATH); }
 
 	for (i = 0; BLACKLIST[i] != NULL; ++i)
 	  {
 		if (strstr(path, BLACKLIST[i]))
 		  {
 			fprintf(stderr, "\e[48;5;9m\e[38;5;0mBLACKLISTED!\e[m \"%s\"\n", path);
-			return(-1);
+			return(P_BLACKLIST);
 		  }
 	  }
-	return(0);
+	return(P_NOERR);
 }
 
 int
