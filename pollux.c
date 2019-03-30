@@ -78,6 +78,9 @@ static char		time_str[50];
 static char		**BLACKLIST = NULL;
 static int		BLIST_SZ, NO_DELETE = 0, HASH_TYPE = __SHA256;
 static int		QUIET = 0;
+static struct stat	cur_file_stats;
+static size_t		total_bytes;
+size_t			total_files;
 
 struct DIGEST
 {
@@ -124,10 +127,10 @@ main(int argc, char *argv[])
 	  }
 
 	printf(
-		"+ Starting scan on %s in directory \"%s\"\n"
-		"+ Using hash \"%s\" to fingerprint files\n"
-		"+ 'nodelete' flag is %s\n"
-		"+ Blacklisted keywords in search paths:\n",
+		"[+] Starting scan on %s in directory \"%s\"\n"
+		"[+] Using hash \"%s\" to fingerprint files\n"
+		"[+] 'nodelete' flag is %s\n"
+		"[+] Blacklisted keywords in search paths:\n",
 		get_time_str(),
 		path,
 		get_hash_name(HASH_TYPE),
@@ -142,11 +145,22 @@ main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	  }
 	time(&end);
-	sprintf(tmp, "\nTIME ELAPSED: %ld seconds\n", (end - start));
+	sprintf(tmp, "\n-------------------------------------------------------\n");
 	write_n(ofd, tmp, strlen(tmp));
-	sprintf(tmp, "\n# DUPLICATE FILES: %d\n", ndups);
+	sprintf(tmp, "\nTime elapsed: %ld seconds\n", (end - start));
 	write_n(ofd, tmp, strlen(tmp));
-	sprintf(tmp, "\n# SKIPPED DIRECTORIES: %d\n", skipped_num);
+	sprintf(tmp, "\nTotal files scanned: %lu\n", total_files);
+	write_n(ofd, tmp, strlen(tmp));
+	sprintf(tmp, "\nTotal duplicate files: %d\n", ndups);
+	write_n(ofd, tmp, strlen(tmp));
+	sprintf(tmp, "\nTotal memory %ssaved: %lu %s\n",
+		(NO_DELETE?"that can be ":""),
+		(total_bytes>0x3b9aca00?total_bytes/0x3b9aca00:
+		 total_bytes>0xf4240?total_bytes/0xf4240:
+		 total_bytes>0x3e8?total_bytes/0x3e8:total_bytes),
+		(total_bytes>0x3b9aca00?"GB":
+		 total_bytes>0xf4240?"MB":
+		 total_bytes>0x3e8?"KB":"bytes"));
 	write_n(ofd, tmp, strlen(tmp));
 	exit(0);
 }
@@ -214,6 +228,9 @@ init(void)
 
 	ndups &= ~ndups;
 	skipped_num &= ~skipped_num;
+	total_bytes &= ~total_bytes;
+	total_files &= ~total_files;
+
 	time(&start);
 }
 
@@ -245,6 +262,9 @@ find_files(char *fpath)
 	size_t		n, n_sv;
 	struct stat	statb;
 	int		i, r;
+	long int	dir_position;
+	char		*p = NULL, *q = NULL;
+	static char	tmp_path[1024];
 
 	n = strlen(fpath);
 	if (n != 0)
@@ -283,13 +303,31 @@ find_files(char *fpath)
 
 		if (S_ISREG(statb.st_mode))
 		  {
+			++total_files;
 			if (get_hash(fpath) == -1)
 				return(-1);
 		  }
 		else if (S_ISDIR(statb.st_mode))
 		  {
+			long int next_position;
+
+			// read the next entry to get the dir position so we can
+			// then continue from there after recursion
+			dinf = readdir(dp);
+			if (dinf != NULL) next_position = telldir(dp);
+			else next_position = 0;
+
+			closedir(dp);
+			dp = NULL;
 			if (find_files(fpath) == -1)
 				return(-1);
+
+			if (next_position == 0) break;
+
+			strncpy(tmp_path, fpath, n_sv);
+			tmp_path[n_sv] = 0;
+			opendir(tmp_path);
+			seekdir(dp, next_position);
 		  }
 	  }
 	*(fpath + n_sv) = 0;
@@ -299,8 +337,8 @@ find_files(char *fpath)
 int
 get_hash(char *_FILE)
 {
-	static int		fd, _errno;
-	static struct stat	statb;
+	static int		_errno;
+	//static struct stat	statb;
 	static unsigned char	*digest = NULL;
 	static size_t		tr;
 	static ssize_t		n;
@@ -311,8 +349,10 @@ get_hash(char *_FILE)
 		printf("Unable to access \"%s\": skipping\n", _FILE);
 		return(0);
 	  }
-	memset(&statb, 0, sizeof(statb));
-	if (lstat(_FILE, &statb) < 0)
+
+	memset(&cur_file_stats, 0, sizeof(cur_file_stats));
+	//memset(&statb, 0, sizeof(statb));
+	if (lstat(_FILE, &cur_file_stats) < 0)
 		pe_r("get_hash() > lstat()");
 	switch(HASH_TYPE)
 	  {
@@ -358,13 +398,11 @@ get_hash(char *_FILE)
 		//remove(_FILE);
 	  }
 
-	close(fd);
 	if (digest != NULL) { destroy_digest(&digest); digest = NULL; }
 	return(0);
 
 	__err:
 	_errno = errno;
-	close(fd);
 	if (digest != NULL) { destroy_digest(&digest); digest = NULL; }
 	errno = _errno;
 	return(-1);
@@ -449,6 +487,7 @@ insert_hash(char *hash, char *fname, struct DIGEST *n)
 	else if (strncmp(hash, n->d, hsz) == 0) // duplicate
 	  {
 		++ndups;
+		total_bytes += cur_file_stats.st_size;
 
 		/*printf("%s and %s both have hash digest %s\n",
 			fname, n->n, hash);*/
