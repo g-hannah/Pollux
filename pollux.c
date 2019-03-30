@@ -128,13 +128,14 @@ main(int argc, char *argv[])
 
 	printf(
 		"[+] Starting scan on %s in directory \"%s\"\n"
-		"[+] Using hash \"%s\" to fingerprint files\n"
-		"[+] 'nodelete' flag is %s\n"
+		"[+] Using \"%s\" digest to fingerprint files\n"
+		"%s"
+		//"[+] 'nodelete' flag is %s\n"
 		"[+] Blacklisted keywords in search paths:\n",
 		get_time_str(),
 		path,
 		get_hash_name(HASH_TYPE),
-		(NO_DELETE?"on":"off"));
+		(NO_DELETE?"[+] No delete option is on":""));
 	for (i = 0; BLACKLIST[i] != NULL; ++i)
 		printf("[%d] \"%s\"\n", (i+1), BLACKLIST[i]);
 	init();
@@ -149,10 +150,13 @@ main(int argc, char *argv[])
 	write_n(ofd, tmp, strlen(tmp));
 	sprintf(tmp, "\nTime elapsed: %ld seconds\n", (end - start));
 	write_n(ofd, tmp, strlen(tmp));
+	fprintf(stdout, "%s", tmp);
 	sprintf(tmp, "\nTotal files scanned: %lu\n", total_files);
 	write_n(ofd, tmp, strlen(tmp));
+	fprintf(stdout, "%s", tmp);
 	sprintf(tmp, "\nTotal duplicate files: %d\n", ndups);
 	write_n(ofd, tmp, strlen(tmp));
+	fprintf(stdout, "%s", tmp);
 	sprintf(tmp, "\nTotal memory %ssaved: %lu %s\n",
 		(NO_DELETE?"that can be ":""),
 		(total_bytes>0x3b9aca00?total_bytes/0x3b9aca00:
@@ -162,6 +166,7 @@ main(int argc, char *argv[])
 		 total_bytes>0xf4240?"MB":
 		 total_bytes>0x3e8?"KB":"bytes"));
 	write_n(ofd, tmp, strlen(tmp));
+	fprintf(stdout, "%s", tmp);
 	exit(0);
 }
 
@@ -495,12 +500,12 @@ insert_hash(char *hash, char *fname, struct DIGEST *n)
 			"%10s %s\"%.*s%s\"\e[m\n"
 			"                and\n"
 			"           %s\"%.*s%s\"\e[m\n"
-			"%10s %s%s\e[m\n",
+			"%10s %s%s\e[m\n\n",
 			"[DUP]", DUPCOL, (int)(WS.ws_col - CUSHION), fname,
 			(strlen(fname)>(WS.ws_col-CUSHION)?"...":""),
 			DUPCOL, (int)(WS.ws_col - CUSHION), n->n,
 			(strlen(n->n)>(WS.ws_col-CUSHION)?"...":""),
-			"[HASH]", HASHCOL, hash);
+			"[DIGEST]", HASHCOL, hash);
 
 		/*sprintf(tmp,
 			"%s and %s both have hash digest %s\n",
@@ -509,10 +514,10 @@ insert_hash(char *hash, char *fname, struct DIGEST *n)
 			"%10s \"%s\"\n"
 			"            and\n"
 			"          \"%s\"\n"
-			"%10s %s\n",
+			"%10s %s\n\n",
 			"[DUP]", fname,
 			n->n,
-			"[HASH]", hash);
+			"[DIGEST]", hash);
 		write_n(ofd, tmp, strlen(tmp));
 
 		if (!NO_DELETE)
