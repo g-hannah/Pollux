@@ -134,7 +134,7 @@ main(int argc, char *argv[])
 		"[+] Using \"%s\" digest to fingerprint files\n"
 		"%s"
 		//"[+] 'nodelete' flag is %s\n"
-		"[+] Blacklisted keywords in search paths:\n",
+		"[+] Blacklisted keywords in pathnames:\n",
 		get_time_str(),
 		path,
 		get_hash_name(HASH_TYPE),
@@ -156,7 +156,9 @@ main(int argc, char *argv[])
 
 	sprintf(tmp, "\n-------------------------------------------------------\n");
 	write_n(ofd, tmp, strlen(tmp));
-	sprintf(tmp, "\nTime elapsed: %ld %s\n",
+	fprintf(stdout, "%s", tmp);
+	sprintf(tmp, "%22s: %ld %s\n",
+		"Time elapsed",
 		(total_seconds>3599?(total_seconds/3600):
 		 total_seconds>59?(total_seconds/60):(end - start)),
 		(total_seconds>3599?"hours":
@@ -164,14 +166,21 @@ main(int argc, char *argv[])
 
 	write_n(ofd, tmp, strlen(tmp));
 	fprintf(stdout, "%s", tmp);
-	sprintf(tmp, "\nTotal files scanned: %lu\n", total_files);
+	sprintf(tmp, "\n%22s: %lu\n",
+		"Total files scanned",
+		total_files);
 	write_n(ofd, tmp, strlen(tmp));
 	fprintf(stdout, "%s", tmp);
-	sprintf(tmp, "\nTotal duplicate files: %d\n", ndups);
+	sprintf(tmp, "%22s: %d\n",
+		"Total duplicate files",
+		ndups);
 	write_n(ofd, tmp, strlen(tmp));
 	fprintf(stdout, "%s", tmp);
-	sprintf(tmp, "\nTotal memory %ssaved: %.2lf %s\n",
-		(NO_DELETE?"that can be ":""),
+	sprintf(tmp, "%*s%16s%s %.2lf %s\n",
+		(NO_DELETE?6:0),
+		"",
+		"Total memory",
+		(NO_DELETE?":":" freed:"),
 		(total_bytes>0x3b9ac9ff?(double)total_bytes/(double)0x3b9aca00:
 		 total_bytes>0xf423f?(double)total_bytes/(double)0xf4240:
 		 total_bytes>0x3e7?(double)total_bytes/(double)0x3e8:total_bytes),
@@ -207,8 +216,15 @@ init(void)
 	root->n = NULL;
 	root->d = NULL;
 
-	if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &WS) < 0)
-		pe("init() > ioctl()");
+	/*
+	 * The call to ioctl() will fail if we're running
+	 * as a daemon process; so check first
+	 */
+	if (isatty(STDOUT_FILENO))
+	  {
+		if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &WS) < 0)
+			pe("init() > ioctl()");
+	  }
 
 	if (outfile == NULL)
 	  {
