@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -79,6 +80,7 @@ static char		**BLACKLIST = NULL;
 static int		BLIST_SZ, NO_DELETE = 0, HASH_TYPE = __SHA256;
 static int		QUIET = 0;
 static struct stat	cur_file_stats;
+static struct rlimit	rlims;
 static size_t		total_bytes;
 size_t			total_files;
 
@@ -143,12 +145,19 @@ main(int argc, char *argv[])
 	  {
 		time(&end);
 		fprintf(stderr, "Scan halted at %ld seconds\n", (end - start));
+		fprintf(stderr, "Scanned %ld files", total_files);
+		fprintf(stderr, "Found %d duplicate files", ndups);
 		exit(EXIT_FAILURE);
 	  }
 	time(&end);
 	sprintf(tmp, "\n-------------------------------------------------------\n");
 	write_n(ofd, tmp, strlen(tmp));
-	sprintf(tmp, "\nTime elapsed: %ld seconds\n", (end - start));
+	sprintf(tmp, "\nTime elapsed: %ld %s\n",
+		((end - start)>3599?((end - start)/3600):
+		 (end - start)>59?((end - start)/60):(end - start)),
+		((end - start)>3599?"hours":
+		 (end - start)>59?"minutes":"seconds"));
+
 	write_n(ofd, tmp, strlen(tmp));
 	fprintf(stdout, "%s", tmp);
 	sprintf(tmp, "\nTotal files scanned: %lu\n", total_files);
@@ -159,12 +168,12 @@ main(int argc, char *argv[])
 	fprintf(stdout, "%s", tmp);
 	sprintf(tmp, "\nTotal memory %ssaved: %lu %s\n",
 		(NO_DELETE?"that can be ":""),
-		(total_bytes>0x3b9aca00?total_bytes/0x3b9aca00:
-		 total_bytes>0xf4240?total_bytes/0xf4240:
-		 total_bytes>0x3e8?total_bytes/0x3e8:total_bytes),
-		(total_bytes>0x3b9aca00?"GB":
-		 total_bytes>0xf4240?"MB":
-		 total_bytes>0x3e8?"KB":"bytes"));
+		(total_bytes>0x3b9ac9ff?total_bytes/0x3b9aca00:
+		 total_bytes>0xf423f?total_bytes/0xf4240:
+		 total_bytes>0x3e7?total_bytes/0x3e8:total_bytes),
+		(total_bytes>0x3b9ac9ff?"GB":
+		 total_bytes>0xf423f?"MB":
+		 total_bytes>0x3e7?"KB":"bytes"));
 	write_n(ofd, tmp, strlen(tmp));
 	fprintf(stdout, "%s", tmp);
 	exit(0);
@@ -236,6 +245,10 @@ init(void)
 	total_bytes &= ~total_bytes;
 	total_files &= ~total_files;
 
+	memset(&rlims, 0, sizeof(rlims));
+	if (getrlimit(RLIMIT_NOFILE, &rlims) < 0)
+		pe("init() > getrlimit()");
+
 	time(&start);
 }
 
@@ -267,7 +280,6 @@ find_files(char *fpath)
 	size_t		n, n_sv;
 	struct stat	statb;
 	int		i, r;
-	long int	dir_position;
 	char		*p = NULL, *q = NULL;
 	static char	tmp_path[1024];
 
@@ -311,6 +323,15 @@ find_files(char *fpath)
 			++total_files;
 			if (get_hash(fpath) == -1)
 				return(-1);
+
+			/*
+			 * Despite the fact that the get_xxx_file_r() function called in
+			 * get_hash() closes the file descriptor before returning,
+			 * continually getting EMFILE error. Therefore, after every
+			 * hash is calculated for a given file, close all open file
+			 * descriptors above that of our stat output file
+			 */
+			for (i = (ofd+1); i < rlims.rlim_cur; ++i) close(i);
 		  }
 		else if (S_ISDIR(statb.st_mode))
 		  {
@@ -331,12 +352,17 @@ find_files(char *fpath)
 
 			strncpy(tmp_path, fpath, n_sv);
 			tmp_path[n_sv] = 0;
-			opendir(tmp_path);
+			if (!(dp = opendir(tmp_path)))
+			  { fprintf(stderr, "find_files: opendir error (%s)\n", strerror(errno)); goto fail; }
+
 			seekdir(dp, next_position);
 		  }
 	  }
 	*(fpath + n_sv) = 0;
 	return(P_NOERR);
+
+	fail:
+	return(P_PATH);
 }
 
 int
