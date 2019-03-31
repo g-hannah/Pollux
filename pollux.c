@@ -113,6 +113,7 @@ main(int argc, char *argv[])
 	static char		c;
 	static int		i;
 	static int		R;
+	time_t			total_seconds;
 	
 	if (get_options(argc, argv) != 0)
 		pe("main() > get_options()");
@@ -150,13 +151,16 @@ main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	  }
 	time(&end);
+
+	total_seconds = (time_t)(end - start);
+
 	sprintf(tmp, "\n-------------------------------------------------------\n");
 	write_n(ofd, tmp, strlen(tmp));
 	sprintf(tmp, "\nTime elapsed: %ld %s\n",
-		((end - start)>3599?((end - start)/3600):
-		 (end - start)>59?((end - start)/60):(end - start)),
-		((end - start)>3599?"hours":
-		 (end - start)>59?"minutes":"seconds"));
+		(total_seconds>3599?(total_seconds/3600):
+		 total_seconds>59?(total_seconds/60):(end - start)),
+		(total_seconds>3599?"hours":
+		 total_seconds>59?"minutes":"seconds"));
 
 	write_n(ofd, tmp, strlen(tmp));
 	fprintf(stdout, "%s", tmp);
@@ -166,11 +170,11 @@ main(int argc, char *argv[])
 	sprintf(tmp, "\nTotal duplicate files: %d\n", ndups);
 	write_n(ofd, tmp, strlen(tmp));
 	fprintf(stdout, "%s", tmp);
-	sprintf(tmp, "\nTotal memory %ssaved: %lu %s\n",
+	sprintf(tmp, "\nTotal memory %ssaved: %.2lf %s\n",
 		(NO_DELETE?"that can be ":""),
-		(total_bytes>0x3b9ac9ff?total_bytes/0x3b9aca00:
-		 total_bytes>0xf423f?total_bytes/0xf4240:
-		 total_bytes>0x3e7?total_bytes/0x3e8:total_bytes),
+		(total_bytes>0x3b9ac9ff?(double)total_bytes/(double)0x3b9aca00:
+		 total_bytes>0xf423f?(double)total_bytes/(double)0xf4240:
+		 total_bytes>0x3e7?(double)total_bytes/(double)0x3e8:total_bytes),
 		(total_bytes>0x3b9ac9ff?"GB":
 		 total_bytes>0xf423f?"MB":
 		 total_bytes>0x3e7?"KB":"bytes"));
@@ -279,9 +283,12 @@ find_files(char *fpath)
 	struct dirent	*dinf = NULL;
 	size_t		n, n_sv;
 	struct stat	statb;
+	long int	next_position;
 	int		i, r;
 	char		*p = NULL, *q = NULL;
 	static char	tmp_path[1024];
+
+	next_position &= ~next_position;
 
 	n = strlen(fpath);
 	if (n != 0)
@@ -331,12 +338,10 @@ find_files(char *fpath)
 			 * hash is calculated for a given file, close all open file
 			 * descriptors above that of our stat output file
 			 */
-			for (i = (ofd+1); i < rlims.rlim_cur; ++i) close(i);
+			for (i = (ofd+2); i < rlims.rlim_cur; ++i) close(i);
 		  }
 		else if (S_ISDIR(statb.st_mode))
 		  {
-			long int next_position;
-
 			// read the next entry to get the dir position so we can
 			// then continue from there after recursion
 			dinf = readdir(dp);
@@ -348,7 +353,7 @@ find_files(char *fpath)
 			if (find_files(fpath) == -1)
 				return(-1);
 
-			if (next_position == 0) break;
+			if (next_position == 0) { fprintf(stderr, "breaking from loop\n"); break; }
 
 			strncpy(tmp_path, fpath, n_sv);
 			tmp_path[n_sv] = 0;
@@ -356,6 +361,10 @@ find_files(char *fpath)
 			  { fprintf(stderr, "find_files: opendir error (%s)\n", strerror(errno)); goto fail; }
 
 			seekdir(dp, next_position);
+		  }
+		else
+		  {
+			continue;
 		  }
 	  }
 	*(fpath + n_sv) = 0;
