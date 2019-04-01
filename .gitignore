@@ -4,3 +4,4 @@ pollux
 *.o
 TESTING
 GUI
+pollux_win.c
