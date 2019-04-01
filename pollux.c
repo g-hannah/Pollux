@@ -891,9 +891,12 @@ print_stats(void)
 int
 remove_which(char *c1, char *c2)
 {
-	char		*tmp = NULL, *p = NULL, *q = NULL;
+	char		*p = NULL, *q = NULL;
 	size_t		l1, l2;
 	int		choice;
+
+	if (strstr(c1, "System Volume")) return(1);
+	else if (strstr(c2, "System Volume")) return(2);
 
 	if (strstr(c1, "/Temporary")) return(1);
 	else if (strstr(c2, "/Temporary")) return(2);
@@ -904,61 +907,36 @@ remove_which(char *c1, char *c2)
 	if (strstr(c1, "Trash")) return(1);
 	else if (strstr(c2, "Trash")) return(2);
 
-	l1 = strlen(c1);
+	if (strstr(c1, "Copy")) return(1);
+	else if (strstr(c2, "Copy")) return(2);
 
-	q = (c1 + (l1 - 1));
+	if ((p = strchr(c1, 0x28)))
+	  {
+		if ((*(p+2) == 0x29) && isdigit(*(p+1))) { choice = 1; goto made_choice; }
+	  }
+	else if ((p = strchr(c2, 0x28)))
+	  {
+		if ((*(p+2) == 0x29) && isdigit(*(p+1))) { choice = 2; goto made_choice; }
+	  }
+
+	q = (c1 + (strlen(c1) - 1));
 	p = q;
 	while (*p != 0x2f && p > (c1 + 1)) --p;
 	++p;
 
-	if (!(tmp = calloc((q - p)+1, 1))) { log_err("remove_which: calloc error"); goto fail; }
-
-	strncpy(tmp, p, (q - p));
-	tmp[(q - p)] = 0;
-
 	l1 = (q - p);
 
-	if ((p = strchr(tmp, 0x28)))
-	  {
-		if ((*(p+2) == 0x29) && isdigit(*(p+1))) // (1) ... (2) etc
-		  { choice = 1; goto made_choice; }
-	  }
-	else
-	  {
-		l2 = strlen(c2);
+	q = (c2 + (strlen(c2) - 1));
+	p = q;
+	while (*p != 0x2f && p > (c2 + 1)) --p;
+	++p;
 
-		q = (c2 + (l2 - 1));
-		p = q;
-		while (*p != 0x2f && p > (c2 + 1)) --p;
-		++p;
-
-		free(tmp); tmp = NULL;
-
-		if (!(tmp = calloc((q - p)+1, 1)))
-		  { log_err("remove_which: calloc error"); goto fail; }
-
-		strncpy(tmp, p, (q - p));
-		tmp[(q - p)] = 0;
-
-		l2 = (q - p);
-
-		if ((p = strchr(tmp, 0x28)))
-		  {
-			if ((*(p+2) == 0x29) && isdigit(*(p+1)))
-			  { choice = 2; goto made_choice; }
-		  }
-	  }
+	l2 = (q - p);
 
 	if (l1 < l2) choice = 1;
 	else if (l2 < l1) choice = 2;
 	else choice = 1;
 
 	made_choice:
-
-	if (tmp != NULL) { free(tmp); tmp = NULL; }
 	return(choice);
-
-	fail:
-	if (tmp != NULL) { free(tmp); tmp = NULL; }
-	return(-1);
 }
