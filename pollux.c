@@ -1,851 +1,797 @@
+#include <assert.h>
 #include <errno.h>
 #include <dirent.h>
-#include <fcntl.h>
 #include <hashlib.h>
 #include <misclib.h>
 #include <signal.h>
+#include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/resource.h>
+//#include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
 
 #define MAXLINE		1024
-#define BLKSIZE		64
-#define DUPCOL		"\e[38;5;124m"
-#define HASHCOL		"\e[38;5;2m"
-#define CUSHION		24
 
-enum R_STATUS
+struct NODE
 {
-	P_NOERR,
-#define P_NOERR P_NOERR
-	P_PATH,
-#define P_PATH P_PATH
-	P_BLACKLIST
-#define P_BLACKLIST P_BLACKLIST
+	int		array;
+	char		*name;
+	size_t		size;
+	struct NODE	*l;
+	struct NODE	*r;
+	struct NODE	*s;
+	char		*hash;
 };
 
-#define pe(str)											\
-{												\
-	fprintf(stderr, "%s: %s\n", (str), strerror(errno));					\
-	exit(0xff);										\
-}
+typedef struct NODE Node;
 
-#define pe_o(str)										\
-{												\
-	ERR_print_errors_fp(stderr);								\
-	return(-1);										\
-}
+/* Option flags */
+int		QUIET;
 
-#define pe_r(str)										\
-{												\
-	fprintf(stderr, "%s: %s\n", (str), strerror(errno));					\
-	return(-1);										\
-}
+struct stat	cur_file_stats;
+Node		*root = NULL;
+int		files_scanned;
+int		dup_files;
+uint64_t	used_bytes;
+uint64_t	wasted_bytes;
+time_t		start, end;
+struct rlimit	rlims;
+char		**user_blacklist = NULL;
+char *illegal_terms[] = 
+  {
+	"/sys",
+	"/usr",
+	"/bin",
+	"/sbin",
+	"/kernel",
+	"/proc",
+	"/dev",
+	"/etc/",
+	"/lib",
+	"/run",
+	"/tmp",
+	"/boot",
+	"/var",
+	"/opt",
+	"/firmware",
+	"/Program Files/",
+	"/ProgramData/",
+	".dll",
+	".so",
+	".bin",
+	(char *)NULL
+  };
 
-#define log(str)										\
-{												\
-	printf("[FIND_DUPS]: %s\n", (str));							\
-}
-
-enum HASHTYPE
-{
-	__MD5,
-#define __MD5 __MD5
-	__SHA1,
-#define __SHA1 __SHA1
-	__SHA256,
-#define __SHA256 __SHA256
-	__SHA384,
-#define __SHA384 __SHA384
-	__SHA512
-#define __SHA512 __SHA512
-};
-
-//static char		*start_dir = NULL;
-static char		*path = NULL;
-static unsigned char	*BLOCK = NULL;
-static struct winsize	WS;
-static int		ofd, ndups, skipped_num;
-static char		*tmp = NULL, *outfile = NULL;
-static time_t		start, end;
-static struct tm	TIME;
-static char		time_str[50];
-
-static char		**BLACKLIST = NULL;
-static int		BLIST_SZ, NO_DELETE = 0, HASH_TYPE = __SHA256;
-static int		QUIET = 0;
-static struct stat	cur_file_stats;
-static struct rlimit	rlims;
-static size_t		total_bytes;
-size_t			total_files;
-
-struct DIGEST
-{
-	char		*n;
-	char		*d;
-	struct DIGEST	*left;
-	struct DIGEST	*right;
-};
-
-struct DIGEST		*root = NULL;
-
-void init(void);
-void clean_up(void);
-void usage(void) __attribute__ ((__noreturn__));
-int get_hash(char *) __THROW __nonnull ((1)) __wur;
-int insert_hash(char *, char *, struct DIGEST *) __THROW __nonnull ((1,2,3)) __wur;
-void free_binary_tree(struct DIGEST *) __THROW __nonnull ((1));
-void print_binary_tree(struct DIGEST *) __THROW __nonnull ((1));
-int find_files(char *) __THROW __nonnull ((1)) __wur;
-int check_path(char *) __THROW __nonnull ((1)) __wur;
-int get_options(int, char *[]) __THROW __nonnull ((2)) __wur;
-char *get_hash_name(int) __wur;
-char *get_time_str(void) __wur;
+int insert_file(Node **, char *, size_t) __nonnull ((1,2)) __wur;
+void free_tree(Node **) __nonnull ((1));
+int scan_dirs(char *) __nonnull ((1)) __wur;
+void log_err(char *, ...) __nonnull ((1));
+void signal_handler(int) __attribute__ ((__noreturn__));
+void pollux_init(void) __attribute__ ((constructor));
+void pollux_fini(void) __attribute__ ((destructor));
+int get_options(int, char *[]) __nonnull ((2)) __wur;
+void print_stats(void);
 
 int
 main(int argc, char *argv[])
 {
-	static char		c;
-	static int		i;
-	static int		R;
-	time_t			total_seconds;
-	
-	if (get_options(argc, argv) != 0)
-		pe("main() > get_options()");
+	int 	r;
+	int	k;
+	time_t	time_taken;
+
+	if (access(argv[1], F_OK) != 0)
+	  { fprintf(stderr, "%s does not exist!\n", argv[1]); goto fail; }
+
+	QUIET &= ~QUIET;
+
+	if (get_options(argc, argv) < 0)
+		goto fail;
 
 	if (QUIET)
 	  {
-		int		dfd;
+		int		fd;
 
-		if ((dfd = open("/dev/null", O_RDWR)) < 0)
-			pe("main() > open()");
-		if (STDOUT_FILENO != dfd)
-			dup2(dfd, STDOUT_FILENO);
-		close(dfd);
+		if (!(fd = open("/dev/null", O_RDWR))) { log_err("main: open error"); goto fail; }
+
+		if (fd != STDOUT_FILENO)
+			dup2(fd, STDOUT_FILENO);
+		if (fd != STDERR_FILENO)
+			dup2(fd, STDERR_FILENO);
+
+		close(fd);
 	  }
 
-	printf(
-		"[+] Starting scan on %s in directory \"%s\"\n"
-		"[+] Using \"%s\" digest to fingerprint files\n"
-		"%s"
-		//"[+] 'nodelete' flag is %s\n"
-		"[+] Blacklisted keywords in pathnames:\n",
-		get_time_str(),
-		path,
-		get_hash_name(HASH_TYPE),
-		(NO_DELETE?"[+] No delete option is on":""));
-	for (i = 0; BLACKLIST[i] != NULL; ++i)
-		printf("[%d] \"%s\"\n", (i+1), BLACKLIST[i]);
-	init();
-	if ((R = find_files(path)) != P_NOERR)
-	  {
-		time(&end);
-		fprintf(stderr, "Scan halted at %ld seconds\n", (end - start));
-		fprintf(stderr, "Scanned %ld files", total_files);
-		fprintf(stderr, "Found %d duplicate files", ndups);
-		exit(EXIT_FAILURE);
-	  }
-	time(&end);
-
-	total_seconds = (time_t)(end - start);
-
-	sprintf(tmp, "\n-------------------------------------------------------\n");
-	write_n(ofd, tmp, strlen(tmp));
-	fprintf(stdout, "%s", tmp);
-	sprintf(tmp, "%22s: %ld %s\n",
-		"Time elapsed",
-		(total_seconds>3599?(total_seconds/3600):
-		 total_seconds>59?(total_seconds/60):(end - start)),
-		(total_seconds>3599?"hours":
-		 total_seconds>59?"minutes":"seconds"));
-
-	write_n(ofd, tmp, strlen(tmp));
-	fprintf(stdout, "%s", tmp);
-	sprintf(tmp, "\n%22s: %lu\n",
-		"Total files scanned",
-		total_files);
-	write_n(ofd, tmp, strlen(tmp));
-	fprintf(stdout, "%s", tmp);
-	sprintf(tmp, "%22s: %d\n",
-		"Total duplicate files",
-		ndups);
-	write_n(ofd, tmp, strlen(tmp));
-	fprintf(stdout, "%s", tmp);
-	sprintf(tmp, "%*s%16s%s %.2lf %s\n",
-		(NO_DELETE?6:0),
-		"",
-		"Total memory",
-		(NO_DELETE?":":" freed:"),
-		(total_bytes>0x3b9ac9ff?(double)total_bytes/(double)0x3b9aca00:
-		 total_bytes>0xf423f?(double)total_bytes/(double)0xf4240:
-		 total_bytes>0x3e7?(double)total_bytes/(double)0x3e8:total_bytes),
-		(total_bytes>0x3b9ac9ff?"GB":
-		 total_bytes>0xf423f?"MB":
-		 total_bytes>0x3e7?"KB":"bytes"));
-	write_n(ofd, tmp, strlen(tmp));
-	fprintf(stdout, "%s", tmp);
-	exit(0);
-}
-
-void
-init(void)
-{
-	if (!(BLOCK = (unsigned char *)calloc(BLKSIZE, sizeof(unsigned char))))
-		pe("init() > calloc(BLOCK)");
-	atexit(clean_up);
-	if (!(tmp = (char *)calloc(MAXLINE, sizeof(char))))
-		pe("init() > calloc(tmp)");
-	if (getcwd(tmp, MAXLINE) == NULL)
-		pe("init() > getcwd()");
-	if (path == NULL)
-	  {
-		if (!(path = (char *)calloc(MAXLINE, sizeof(char))))
-			pe("init() > calloc(path)");
-		memset(path, 0, MAXLINE);
-		strncpy(path, tmp, strlen(tmp));
-	  }
-	if (!(root = (struct DIGEST *)malloc(sizeof(struct DIGEST))))
-		pe("init() > malloc()");
-	root->left = NULL;
-	root->right = NULL;
-	root->n = NULL;
-	root->d = NULL;
-
-	/*
-	 * The call to ioctl() will fail if we're running
-	 * as a daemon process; so check first
-	 */
-	if (isatty(STDOUT_FILENO))
-	  {
-		if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &WS) < 0)
-			pe("init() > ioctl()");
-	  }
-
-	if (outfile == NULL)
-	  {
-		sprintf((tmp + strlen(tmp)),
-			"/removed_dups_%ld.txt", time(NULL));
-	  }
-	else
-	  {
-		char		*home = NULL, *p = NULL;
-		int		abs = 0;
-
-		p = outfile;
-		while (p < (outfile + strlen(outfile)))
-		  {
-			if (*p == 0x2f)
-			  { abs = 1; break; }
-			++p;
-		  }
-		if (!abs)
-			sprintf((tmp + strlen(tmp)), "/%s", outfile);
-		else
-		  {
-			memset(tmp, 0, MAXLINE);
-			strncpy(tmp, outfile, MAXLINE);
-		  }
-	  }
-	if ((ofd = open(tmp, O_RDWR|O_CREAT|O_TRUNC, S_IRWXU & ~S_IXUSR)) < 0)
-		pe("init() > open(tmp)");
-
-	if (QUIET)
-	  {
-		if (STDERR_FILENO != ofd)
-			dup2(ofd, STDERR_FILENO);
-	  }
-
-	ndups &= ~ndups;
-	skipped_num &= ~skipped_num;
-	total_bytes &= ~total_bytes;
-	total_files &= ~total_files;
-
-	memset(&rlims, 0, sizeof(rlims));
-	if (getrlimit(RLIMIT_NOFILE, &rlims) < 0)
-		pe("init() > getrlimit()");
+	printf(">>> Pollux v1.0 <<<\n");
+	printf("[+] Starting scan in %s *\n\n", argv[1]);
 
 	time(&start);
-}
+	r = scan_dirs(argv[1]);
+	time(&end);
 
-void
-clean_up(void)
-{
-	static int		k;
+	print_stats();
 
-	if (path != NULL) free(path);
-	if (BLOCK != NULL) free(BLOCK);
-	if (tmp != NULL) free(tmp);
-	if (BLACKLIST != NULL)
-	  {
-		for (k = 0; BLACKLIST[k] != NULL; ++k)
-		  {
-			if (BLACKLIST[k] != NULL) { free(BLACKLIST[k]); BLACKLIST[k] = NULL; }
-		  }
-		free(BLACKLIST);
-	  }
-	close(ofd);
-	free_binary_tree(root);
+	if (r < 0) exit(EXIT_FAILURE);
+	else exit(EXIT_SUCCESS);
+
+	fail:
+	exit(EXIT_FAILURE);
 }
 
 int
-find_files(char *fpath)
+scan_dirs(char *path)
 {
+	size_t		n, n_sv;
 	DIR		*dp = NULL;
 	struct dirent	*dinf = NULL;
-	size_t		n, n_sv;
-	struct stat	statb;
-	long int	next_position;
-	int		i, r;
-	char		*p = NULL, *q = NULL;
-	static char	tmp_path[1024];
+	long		dir_position;
+	long		next_position;
+	int		i;
+	int		illegal;
 
-	next_position &= ~next_position;
+	n = strlen(path);
 
-	n = strlen(fpath);
 	if (n != 0)
 	  {
-		if (fpath[(n-1)] != 0x2f)
+		if (path[(n-1)] != 0x2f)
 	  	  {
-			fpath[n++] = 0x2f;
-			fpath[n] = 0;
+			path[n++] = 0x2f;
+			path[n] = 0;
 	  	  }
 	  }
+
 	n_sv = n;
 
-	memset(&statb, 0, sizeof(statb));
-	if (!(dp = opendir(fpath)))
-		return(-1);
+	if (!(dp = opendir(path)))
+	  {
+		if (errno == EACCES);
+		  {
+			//fprintf(stderr, "%s (\e[38;5;9mPermission denied\e[m)\n\n", path);
+			return(0);
+		  }
+
+		log_err("scan_dirs: opendir error");
+	  }
+
+	//fprintf(stdout, "Scanning %s\n", path);
+
+	illegal &= ~illegal;
 
 	while ((dinf = readdir(dp)) != NULL)
 	  {
-		if ((strncmp(".", dinf->d_name, 1) == 0) ||
-		    (strncmp("..", dinf->d_name, 2) == 0) ||
-		    dinf->d_name[0] == 0x2e)
+		if (strcmp(".", dinf->d_name) == 0
+		    || strcmp("..", dinf->d_name) == 0
+		    || dinf->d_name[0] == '.')
 			continue;
 
-		strncpy((fpath + n), dinf->d_name, strlen(dinf->d_name));
-		*(fpath + n + strlen(dinf->d_name)) = 0;
+		strncpy((path + n), dinf->d_name, strlen(dinf->d_name));
+		*(path + n + strlen(dinf->d_name)) = 0;
 
-		if (lstat(fpath, &statb) < 0)
-		  { printf("lstat: %s: %s\n", fpath, strerror(errno)); return(-1); }
-		
-
-		r = check_path(fpath);
-		if (r == P_PATH)
-			return(P_PATH);
-		else if (r == P_BLACKLIST)
-			continue;
-
-		if (S_ISREG(statb.st_mode))
+		for (i = 0; illegal_terms[i] != NULL; ++i)
 		  {
-			++total_files;
-			if (get_hash(fpath) == -1)
-				return(-1);
-
-			/*
-			 * Despite the fact that the get_xxx_file_r() function called in
-			 * get_hash() closes the file descriptor before returning,
-			 * continually getting EMFILE error. Therefore, after every
-			 * hash is calculated for a given file, close all open file
-			 * descriptors above that of our stat output file
-			 */
-			for (i = (ofd+2); i < rlims.rlim_cur; ++i) close(i);
+			if (strstr(path, illegal_terms[i]))
+				illegal = 1;
 		  }
-		else if (S_ISDIR(statb.st_mode))
-		  {
-			// read the next entry to get the dir position so we can
-			// then continue from there after recursion
-			dinf = readdir(dp);
-			if (dinf != NULL) next_position = telldir(dp);
-			else next_position = 0;
 
+		if (illegal) { illegal &= ~illegal; continue; }		
+
+		if (user_blacklist != NULL)
+		  {
+			for (i = 0; user_blacklist[i] != NULL; ++i)
+		  	  {
+				if (strstr(path, user_blacklist[i]))
+					illegal = 1;
+		  	  }
+
+			if (illegal) { illegal &= ~illegal; continue; }
+		  }
+
+		memset(&cur_file_stats, 0, sizeof(cur_file_stats));
+		if (lstat(path, &cur_file_stats) < 0)
+		  { log_err("scan_dirs: lstat error for %s", path); goto fail; }
+
+		if (S_ISREG(cur_file_stats.st_mode))
+		  {
+			++files_scanned;
+			used_bytes += cur_file_stats.st_size;
+
+			if (insert_file(&root, path, cur_file_stats.st_size) < 0)
+				return(-1);
+		  }
+		else if (S_ISDIR(cur_file_stats.st_mode))
+		  {
+			dir_position = telldir(dp);
 			closedir(dp);
 			dp = NULL;
-			if (find_files(fpath) == -1)
+			for (i = 3; i < rlims.rlim_cur; ++i) close(i);
+
+			if (scan_dirs(path) < 0)
 				return(-1);
 
-			if (next_position == 0) { fprintf(stderr, "breaking from loop\n"); break; }
+			path[n] = 0;
 
-			strncpy(tmp_path, fpath, n_sv);
-			tmp_path[n_sv] = 0;
-			if (!(dp = opendir(tmp_path)))
-			  { fprintf(stderr, "find_files: opendir error (%s)\n", strerror(errno)); goto fail; }
+			if (!(dp = opendir(path)))
+			  { log_err("scan_dirs: opendir error"); goto fail; }
 
-			seekdir(dp, next_position);
+			seekdir(dp, dir_position);
 		  }
 		else
 		  {
 			continue;
 		  }
-	  }
-	*(fpath + n_sv) = 0;
-	return(P_NOERR);
 
-	fail:
-	return(P_PATH);
-}
-
-int
-get_hash(char *_FILE)
-{
-	static int		_errno;
-	//static struct stat	statb;
-	static unsigned char	*digest = NULL;
-	static size_t		tr;
-	static ssize_t		n;
-	static char		*h = NULL;
-
-	if (access(_FILE, R_OK) != 0)
-	  {
-		printf("Unable to access \"%s\": skipping\n", _FILE);
-		return(0);
 	  }
 
-	memset(&cur_file_stats, 0, sizeof(cur_file_stats));
-	//memset(&statb, 0, sizeof(statb));
-	if (lstat(_FILE, &cur_file_stats) < 0)
-		pe_r("get_hash() > lstat()");
-	switch(HASH_TYPE)
-	  {
-		case(__MD5):
-		if (get_md5_file_r(_FILE, &digest) == NULL)
-			pe_r("get_hash() > get_md5_file_r()");
-		h = hexlify(digest, EVP_MD_size(EVP_md5()));
-		break;
-		case(__SHA1):
-		if (get_sha1_file_r(_FILE, &digest) == NULL)
-			pe_r("get_hash() > get_sha1_file_r()");
-		h = hexlify(digest, EVP_MD_size(EVP_sha1()));
-		break;
-		case(__SHA256):
-		if (get_sha256_file_r(_FILE, &digest) == NULL)
-			pe_r("get_hash() > get_sha256_file_r()");
-		h = hexlify(digest, EVP_MD_size(EVP_sha256()));
-		break;
-		case(__SHA384):
-		if (get_sha384_file_r(_FILE, &digest) == NULL)
-			pe_r("get_hash() > get_sha384_file_r()");
-		h = hexlify(digest, EVP_MD_size(EVP_sha384()));
-		break;
-		case(__SHA512):
-		if (get_sha512_file_r(_FILE, &digest) == NULL)
-			pe_r("get_hash() > get_sha512_file_r()");
-		h = hexlify(digest, EVP_MD_size(EVP_sha512()));
-		break;
-		default:
-		if (get_sha256_file_r(_FILE, &digest) == NULL)
-			pe_r("get_hash() > get_sha256_file_r()");
-		h = hexlify(digest, EVP_MD_size(EVP_sha256()));
-	  }
-
-	n = insert_hash(h, _FILE, root);
-	if (n == -2) // error occurred
-	  {
-		printf("get_hash() > insert_hash(): %s\n", strerror(errno));
-		goto __err;
-	  }
-	else if (n == -1) // duplicate file
-	  {
-		//remove(_FILE);
-	  }
-
-	if (digest != NULL) { destroy_digest(&digest); digest = NULL; }
+	path[n_sv] = 0;
 	return(0);
 
-	__err:
-	_errno = errno;
-	if (digest != NULL) { destroy_digest(&digest); digest = NULL; }
-	errno = _errno;
+	fail:
+	path[n_sv] = 0;
 	return(-1);
 }
 
 int
-insert_hash(char *hash, char *fname, struct DIGEST *n)
+insert_file(Node **root, char *fname, size_t size)
 {
-	ssize_t		r;
-	size_t		hsz;
+	int		i;
+	unsigned char	*cur_file_hash = NULL;
+	unsigned char	*comp_file_hash = NULL;
+	char		*h = NULL;
+	char		*hash_hex = NULL;
+	Node		*nptr = NULL;
 
-
-	hsz = (EVP_MD_size(EVP_sha512()) * 2);
-
-	if (n->d == NULL)
+	if (*root == NULL)
 	  {
-		if (!(n->d = (char *)calloc(hsz+1, sizeof(char))))
-			return(-2);
-		if (strncpy(n->d, hash, hsz) == NULL)
-			return(-2);
-		n->d[hsz] = 0;
-		if (!(n->n = (char *)calloc((strlen(fname)+1), sizeof(char))))
-			return(-2);
-		if (strncpy(n->n, fname, strlen(fname)) == NULL)
-			return(-2);
-		n->n[(strlen(fname))] = 0;
+		if (!((*root) = malloc(sizeof(Node))))
+		  { log_err("insert_file: malloc error"); goto fail; }
+
+		memset(*root, 0, sizeof(Node));
+
+		if (!((*root)->name = calloc(MAXLINE, 1)))
+		  { log_err("insert_file: calloc error"); goto fail; }
+
+		strncpy((*root)->name, fname, strlen(fname));
+		(*root)->name[strlen(fname)] = 0;
+		(*root)->size = size;
+		(*root)->hash = NULL;
+		(*root)->l = NULL;
+		(*root)->r = NULL;
+		(*root)->s = NULL;
+		(*root)->array = 0;
+
 		return(0);
 	  }
 
-	if (strncmp(hash, n->d, hsz) < 0)
+	if (size < (*root)->size)
+		insert_file(&(*root)->l, fname, size);
+
+	else if (size > (*root)->size)
+		insert_file(&(*root)->r, fname, size);
+
+	else // possible duplicate file
 	  {
-		if (n->left == NULL)
+		if (!(hash_hex = calloc((EVP_MAX_MD_SIZE*2)+1, 1))) { log_err("insert_file: calloc error"); goto fail; }
+
+		if (!(cur_file_hash = get_sha256_file(fname)))
 		  {
-			if (!(n->left = (struct DIGEST *)malloc(sizeof(struct DIGEST))))
-				return(-2);
-			n->left->left = NULL;
-			n->left->right = NULL;
-			if (!(n->left->d = (char *)calloc(hsz+1, sizeof(char))))
-				return(-2);
-			if (strncpy(n->left->d, hash, hsz) == NULL)
-				return(-2);
-			n->left->d[hsz] = 0;
-			if (!(n->left->n = (char *)calloc((strlen(fname)+1), sizeof(char))))
-				return(-2);
-			if (strncpy(n->left->n, fname, strlen(fname)) == NULL)
-				return(-2);
-			n->left->n[(strlen(fname))] = 0;
-			return(0);
-		  }
-		else
-		  {
-			r = insert_hash(hash, fname, n->left);
-			return(r);
-		  }
-	  }
-	else if (strncmp(hash, n->d, hsz) > 0) // recur right
-	  {
-		if (n->right == NULL) // put it here
-		  {
-			if (!(n->right = (struct DIGEST *)malloc(sizeof(struct DIGEST))))
-				return(-2);
-			n->right->left = NULL;
-			n->right->right = NULL;
-			if (!(n->right->d = (char *)calloc(hsz+1, sizeof(char))))
-				return(-2);
-			if (strncpy(n->right->d, hash, hsz) == NULL)
-				return(-2);
-			n->right->d[hsz] = 0;
-			if (!(n->right->n = (char *)calloc((strlen(fname)+1), sizeof(char))))
-				return(-2);
-			if (strncpy(n->right->n, fname, strlen(fname)) == NULL)
-				return(-2);
-			n->right->n[(strlen(fname))] = 0;
-			return(0);
-		  }
-		else
-		  {
-			r = insert_hash(hash, fname, n->right);
-			return(r);
-		  }
-	  }
-	else if (strncmp(hash, n->d, hsz) == 0) // duplicate
-	  {
-		++ndups;
-		total_bytes += cur_file_stats.st_size;
-
-		/*printf("%s and %s both have hash digest %s\n",
-			fname, n->n, hash);*/
-		printf(
-			"%10s %s\"%.*s%s\"\e[m\n"
-			"                and\n"
-			"           %s\"%.*s%s\"\e[m\n"
-			"%10s %s%s\e[m\n\n",
-			"[DUP]", DUPCOL, (int)(WS.ws_col - CUSHION), fname,
-			(strlen(fname)>(WS.ws_col-CUSHION)?"...":""),
-			DUPCOL, (int)(WS.ws_col - CUSHION), n->n,
-			(strlen(n->n)>(WS.ws_col-CUSHION)?"...":""),
-			"[DIGEST]", HASHCOL, hash);
-
-		/*sprintf(tmp,
-			"%s and %s both have hash digest %s\n",
-			fname, n->n, hash);*/
-		sprintf(tmp,
-			"%10s \"%s\"\n"
-			"            and\n"
-			"          \"%s\"\n"
-			"%10s %s\n\n",
-			"[DUP]", fname,
-			n->n,
-			"[DIGEST]", hash);
-		write_n(ofd, tmp, strlen(tmp));
-
-		if (!NO_DELETE)
-		  {
-			if (strlen(fname) > strlen(n->n))
-		  	  {
-				unlink(n->n);
-				/*printf("removed %s\n", n->n);
-				sprintf(tmp, "removed %s\n", n->n);*/
-				printf("%10s %s\"%.*s%s\"\e[m\n\n",
-					"[REMOVED]", DUPCOL, (int)(WS.ws_col - CUSHION), n->n,
-					(strlen(n->n)>(WS.ws_col-CUSHION)?"...":""));
-				sprintf(tmp,
-					"%10s \"%s\"\n",
-					"[REMOVED]", n->n);
-				write_n(ofd, tmp, strlen(tmp));
-				if ((n->n = realloc(n->n, strlen(fname)+1)) == NULL)
-					return(-2);
-				strncpy(n->n, fname, strlen(fname));
-				*(n->n + strlen(fname)) = 0;
-		  	  }
-			else
-		  	  {
-				unlink(fname);
-				/*printf("removed %s\n", fname);
-				sprintf(tmp, "removed %s\n", fname);*/
-				printf("%10s %s\"%.*s%s\"\e[m\n\n",
-					"[REMOVED]", DUPCOL, (int)(WS.ws_col - CUSHION), fname,
-					(strlen(fname)>(WS.ws_col-CUSHION)?"...":""));
-				sprintf(tmp,
-					"%10s \"%s\"\n",
-					"[REMOVED]", fname);
-				write_n(ofd, tmp, strlen(tmp));
-		  	  }
-		  }
-		return(-1);
-	  }
-}
-
-void
-free_binary_tree(struct DIGEST *n)
-{
-	if (n->left != NULL)
-		free_binary_tree(n->left);
-	if (n->right != NULL)
-		free_binary_tree(n->right);
-	if (n->d != NULL) free(n->d);
-	n->d = NULL;
-	if (n->n != NULL) free(n->n);
-	n->n = NULL;
-	free(n);
-	n = NULL;
-	return;
-}
-
-void
-print_binary_tree(struct DIGEST *n)
-{
-	if (n->left != NULL)
-		print_binary_tree(n->left);
-	if (n->right != NULL)
-		print_binary_tree(n->right);
-	printf("[%s][%s]\n", n->n, n->d);
-	return;
-}
-
-int
-check_path(char *path)
-{
-	static int		i;
-
-	if (strncmp("./", path, 2) == 0)
-	// unacceptable -- need to know the full path to apply the blacklist
-	  { printf("\e[48;5;9m\e[38;5;0mAbsolute pathnames ONLY! (no \"./\" allowed)\e[m\n"); return(P_PATH); }
-
-	for (i = 0; BLACKLIST[i] != NULL; ++i)
-	  {
-		if (strstr(path, BLACKLIST[i]))
-		  {
-			fprintf(stderr, "\e[48;5;9m\e[38;5;0mBLACKLISTED!\e[m \"%s\"\n", path);
-			return(P_BLACKLIST);
-		  }
-	  }
-	return(P_NOERR);
-}
-
-int
-get_options(int _argc, char *_argv[])
-{
-	static char		*p = NULL, *q = NULL;
-	static int		i, j, blist_on, bidx;
-
-	blist_on = 0;
-	BLIST_SZ = 16;
-	if (!(BLACKLIST = (char **)calloc(BLIST_SZ, sizeof(char *))))
-		return(-1);
-	for (i = 0; i < BLIST_SZ; ++i)
-		BLACKLIST[i] = NULL;
-
-	for (i = 0; i < _argc; ++i)
-	  {
-		if ((strncmp("--blacklist", _argv[i], 11) == 0) ||
-		     (strncmp("-B", _argv[i], 2) == 0))
-		  {
-			blist_on = 1;
-			bidx &= ~bidx;
-			j = (i+1);
-			while (j < _argc &&
-				(strncmp("--", _argv[j], 2) != 0) &&
-				(strncmp("-", _argv[j], 1) != 0))
+			if (errno == EACCES)
 			  {
-				if (!(BLACKLIST[bidx] = (char *)calloc(strlen(_argv[j])+1, sizeof(char))))
-					return(-1);
-				strncpy(BLACKLIST[bidx], _argv[j], strlen(_argv[j]));
-				BLACKLIST[bidx][strlen(_argv[j])] = 0;
-				++bidx; ++j;
-				if (bidx >= BLIST_SZ)
-				  {
-					if (!(BLACKLIST = (char **)realloc(BLACKLIST, (BLIST_SZ*2))))
-						return(-1);
-					BLIST_SZ *= 2;
-				  }
+				//fprintf(stderr, "%s (\e[38;5;9mPermission denied\e[m)\n\n", fname);
+				goto fini;
 			  }
-			BLACKLIST[bidx] = NULL;
+
+			log_err("insert_file: get_sha256_file error");
+			goto fail;
+		  }
+
+		if (!(h = hexlify((char *)cur_file_hash, EVP_MD_size(EVP_sha256()))))
+		  { log_err("insert_file: hexlify error"); goto fail; }
+
+		strncpy(hash_hex, h, (EVP_MD_size(EVP_sha256()) * 2));
+
+		if ((*root)->array == 0)
+		  {
+			if (!(comp_file_hash = get_sha256_file((*root)->name)))
+		  	  {
+				if (errno == EACCES)
+			  	  {
+					//fprintf(stderr, "%s (\e[38;5;9mPermission denied\e[m)\n\n", fname);
+					goto fini;
+			  	  }
+
+				log_err("insert_file: get_sha256_file_r error");
+				goto fail;
+		 	   }
+
+			if (!(h = hexlify(comp_file_hash, EVP_MD_size(EVP_sha256()))))
+		    	  { log_err("insert_file: hexlify error"); goto fail; }
+
+			if (!((*root)->hash = calloc((EVP_MAX_MD_SIZE*2)+1, 1)))
+			  { log_err("insert_file: calloc error"); goto fail; }
+
+			strncpy((*root)->hash, h, (EVP_MD_size(EVP_sha256())*2));
+			(*root)->hash[(EVP_MD_size(EVP_sha256())*2)] = 0;
+		  }
+
+		if (strncmp(hash_hex, (*root)->hash, (EVP_MD_size(EVP_sha256()) * 2)) == 0) // duplicate files
+		  {
+			wasted_bytes += cur_file_stats.st_size;
+			++dup_files;
+
+			int		choice;
+			char		*tmp = NULL;
+			char		*p = NULL, *q = NULL;
+			size_t		l1, l2;
+
+			if (strstr(fname, "/Temporary")) { choice = 1; goto made_choice; }
+			else if (strstr((*root)->name, "/Temporary")) { choice = 2; goto made_choice; }
+
+			if (strstr(fname, "$RECYCLE")) { choice = 1; goto made_choice; }
+			else if (strstr((*root)->name, "$RECYCLE")) { choice = 2; goto made_choice; }
+			
+			if (strstr(fname, "Trash") && strstr(fname, ".local")) { choice = 1; goto made_choice; }
+			else if (strstr((*root)->name, "Trash") && strstr((*root)->name, ".local"))
+			  { choice = 2; goto made_choice; }
+
+			l1 = strlen(fname);
+			l2 = strlen((*root)->name);
+
+			q = (fname + (l1 - 1));
+			p = q;
+			while (*p != 0x2f && p > (fname + 1)) --p;
+			++p;
+
+			if (!(tmp = calloc(256, 1))) { log_err("insert_file: calloc error"); goto fail; }
+			strncpy(tmp, p, ((q - p)>=256?255:(q - p)));
+			tmp[((q - p)>=256?255:(q - p))] = 0;
+
+			if (strstr(tmp, "(1)") || strstr(tmp, "(2)")) { choice = 1; goto made_choice; }
+
+			l1 = (q - p);
+
+			q = ((*root)->name + (l2 - 1));
+			p = q;
+			while (*p != 0x2f && p > ((*root)->name + 1)) --p;
+			++p;
+
+			strncpy(tmp, p, ((q - p)>=256?255:(q - p)));
+			tmp[((q - p)>=256?255:(q - p))] = 0;
+
+			if (strstr(tmp, "(1)") || strstr(tmp, "(2)")) { choice = 2; goto made_choice; }
+
+			l2 = (q - p);
+
+			if (tmp != NULL) { free(tmp); tmp = NULL; }
+
+			if (l1 < l2) choice = 1;
+			else if (l2 < l1) choice = 2;
+			else choice = 1;
+
+			made_choice:
+
+			if (tmp != NULL) { free(tmp); tmp = NULL; }
+
+			fprintf(stdout,
+				"|| %s%s%s\n"
+				"|| %s%s%s\n"
+				" =>[\e[38;5;10m%s\e[m]\n\n",
+				(choice==1?"\e[9;38;5;88m":""),
+				fname,
+				(choice==1?"\e[m":""),
+				(choice==2?"\e[9;38;5;88m":""),
+				(*root)->name,
+				(choice==2?"\e[m":""),
+				hash_hex);
+
+			goto fini;
+		  }
+		else
+		  {
+			/*
+			 * Before, those nodes with the same size were joined using a linked list;
+			 * but due to not great performance (presumably due to non-contiguous
+			 * memory accesses while testing for a duplicate file in the linked list),
+			 * using a single array of nodes, which will go as needed. This should ensure
+			 * better spatial locality and thus better usage of the fast cache memories
+			 */
+			if ((*root)->array == 0)
+			  {
+				if (!((*root)->s = calloc(1, sizeof(Node))))
+				    { log_err("insert_file: calloc error"); goto fail; }
+
+				(*root)->array = 1;
+
+				if (!(((*root)->s[0]).name = calloc(MAXLINE, 1)))
+				  { log_err("insert_file: calloc error"); goto fail; }
+
+				strncpy((*root)->s[0].name, fname, strlen(fname));
+				((*root)->s[0]).name[strlen(fname)] = 0;
+
+				if (!(((*root)->s[0]).hash = calloc((EVP_MAX_MD_SIZE*2)+1, 1)))
+				  { log_err("insert_file: calloc error"); goto fail; }
+
+				strncpy((*root)->s[0].hash, hash_hex, (EVP_MD_size(EVP_sha256())*2));
+				((*root)->s[0]).hash[(EVP_MD_size(EVP_sha256())*2)] = 0;
+
+				((*root)->s[0]).size = size;
+				((*root)->s[0]).array = 0;
+				((*root)->s[0]).l = NULL;
+				((*root)->s[0]).r = NULL;
+				((*root)->s[0]).s = NULL;
+
+				goto fini;
+			  }
+			else
+			  {
+				for (i = 0; i < (*root)->array; ++i)
+				  {
+					if (strncmp(hash_hex, ((*root)->s[i]).hash, EVP_MD_size(EVP_sha256())*2) == 0)
+		 			  {
+						wasted_bytes += cur_file_stats.st_size;
+						++dup_files;
+
+						int		choice;
+						char		*tmp = NULL;
+						char		*p = NULL, *q = NULL;
+						size_t		l1, l2;
+
+						if (strstr(fname, "/Temporary")) { choice = 1; goto made_choice2; }
+						else if (strstr((*root)->s[i].name, "/Temporary")) { choice = 2; goto made_choice2; }
+
+						if (strstr(fname, "$RECYCLE")) { choice = 1; goto made_choice2; }
+						else if (strstr((*root)->s[i].name, "$RECYCLE")) { choice = 2; goto made_choice2; }
+			
+						if (strstr(fname, "Trash") && strstr(fname, ".local")) { choice = 1; goto made_choice2; }
+						else if (strstr((*root)->s[i].name, "Trash") && strstr((*root)->s[i].name, ".local"))
+			  			  { choice = 2; goto made_choice2; }
+
+						l1 = strlen(fname);
+						l2 = strlen((*root)->s[i].name);
+
+						q = (fname + (l1 - 1));
+						p = q;
+						while (*p != 0x2f && p > (fname + 1)) --p;
+						++p;
+
+						if (!(tmp = calloc(256, 1))) { log_err("insert_file: calloc error"); goto fail; }
+						strncpy(tmp, p, ((q - p)>=256?255:(q - p)));
+						tmp[((q - p)>=256?255:(q - p))] = 0;
+
+						if (strstr(tmp, "(1)") || strstr(tmp, "(2)")) { choice = 1; goto made_choice2; }
+						l1 = (q - p);
+
+						q = ((*root)->s[i].name + (l2 - 1));
+						p = q;
+						while (*p != 0x2f && p > ((*root)->s[i].name + 1)) --p;
+						++p;
+
+						strncpy(tmp, p, ((q - p)>=256?255:(q - p)));
+						tmp[((q - p)>=256?255:(q - p))] = 0;
+
+						if (strstr(tmp, "(1)") || strstr(tmp, "(2)")) { choice = 2; goto made_choice2; }
+
+						l2 = (q - p);
+
+						if (tmp != NULL) { free(tmp); tmp = NULL; }
+
+						if (l1 < l2) choice = 1;
+						else if (l2 < l1) choice = 2;
+						else choice = 1;
+
+						made_choice2:
+
+						if (tmp != NULL) { free(tmp); tmp = NULL; }
+
+						fprintf(stdout,
+							"|| %s%s%s\n"
+							"|| %s%s%s\n"
+							" =>[\e[38;5;10m%s\e[m]\n\n",
+							(choice==1?"\e[9;38;5;88m":""),
+							fname,
+							(choice==1?"\e[m":""),
+							(choice==2?"\e[9;38;5;88m":""),
+							((*root)->s[i]).name,
+							(choice==2?"\e[m":""),
+							hash_hex);
+
+						goto fini;
+					  }
+				  }
+
+				(*root)->array = ((*root)->array + 1);
+
+				if (!((*root)->s = realloc((*root)->s, (*root)->array * sizeof(Node))))
+				  { log_err("insert_file: realloc error"); goto fail; }
+
+				nptr = &((*root)->s[((*root)->array - 1)]);
+
+				memset(nptr, 0, sizeof(Node));
+				nptr->array = 0;
+				nptr->l = NULL;
+				nptr->r = NULL;
+				nptr->s = NULL;
+				nptr->hash = NULL;
+
+				if (!(nptr->name = calloc(MAXLINE, 1)))
+				  { log_err("insert_file: malloc error"); goto fail; }
+				strncpy(nptr->name, fname, strlen(fname));
+				nptr->name[strlen(fname)] = 0;
+
+				if (!(nptr->hash = calloc((EVP_MAX_MD_SIZE*2)+1, 1)))
+				  { log_err("insert_file: calloc error"); goto fail; }
+
+				strncpy(nptr->hash, hash_hex, (EVP_MD_size(EVP_sha256())*2));
+				nptr->hash[(EVP_MD_size(EVP_sha256())*2)] = 0;
+
+				nptr->size = size;
+			  }
+		  }
+	  }
+
+	fini:
+	if (hash_hex != NULL) { free(hash_hex); hash_hex = NULL; }
+
+	return (0);
+
+	fail:
+	if (hash_hex != NULL) { free(hash_hex); hash_hex = NULL; }
+
+	return(-1);
+}
+
+void
+free_tree(Node **root)
+{
+	int		i;
+
+	if (*root == NULL) return;
+
+	if ((*root)->l) free_tree(&((*root)->l));
+	if ((*root)->r) free_tree(&((*root)->r));
+
+	if ((*root)->array > 0)
+	  {
+		for (i = 0; i < (*root)->array; ++i)
+		  {
+			if (((*root)->s[i]).name != NULL)
+			  { free(((*root)->s[i]).name); ((*root)->s[i]).name = NULL; }
+			if (((*root)->s[i]).hash != NULL)
+			  { free(((*root)->s[i]).hash); ((*root)->s[i]).hash = NULL; }
+		  }
+
+		(*root)->array = 0;
+	  }
+
+	if ((*root)->name != NULL) { free((*root)->name); (*root)->name = NULL; }
+
+	free(*root); *root = NULL;
+
+	return;
+}
+
+void
+log_err(char *fmt, ...)
+{
+	va_list		args;
+	char		*tmp = NULL;
+
+	tmp = calloc(MAXLINE, 1);
+	memset(tmp, 0, MAXLINE);
+
+	va_start(args, fmt);
+	vsprintf(tmp, fmt, args);
+	va_end(args);
+
+	fprintf(stderr, "%s (%s)\n", tmp, strerror(errno));
+
+	if (tmp != NULL) { free(tmp); tmp = NULL; }
+	return;
+}
+
+void
+signal_handler(int signo)
+{
+	int	i;
+
+	setvbuf(stdout, NULL, _IONBF, 0);
+	for (i = 0; i < 2; ++i)
+		printf("%c%c%c", 0x08, 0x20, 0x08);
+	setvbuf(stdout, NULL, _IOLBF, 0);
+
+	printf("\n>>> Pollux v1.0 <<<\n*** Caught %s ***\n",
+		(signo==SIGINT?"SIGINT":
+		 signo==SIGQUIT?"SIGQUIT":"signal"));
+
+	time(&end);
+	print_stats();
+	free_tree(&root);
+
+	exit(EXIT_SUCCESS);
+}
+
+void
+pollux_init(void)
+{
+	used_bytes &= ~used_bytes;
+	wasted_bytes &= ~wasted_bytes;
+	files_scanned &= ~files_scanned;
+	dup_files &= ~dup_files;
+
+	memset(&rlims, 0, sizeof(rlims));
+	if (getrlimit(RLIMIT_NOFILE, &rlims) < 0)
+	  { log_err("pollux_init: getrlimit error"); goto fail; }
+
+	signal(SIGINT, signal_handler);
+	signal(SIGQUIT, signal_handler);
+
+	return;
+
+	fail:
+	exit(EXIT_FAILURE);
+}
+
+void
+pollux_fini(void)
+{
+	if (root) free_tree(&root);
+}
+
+int
+get_options(int argc, char *argv[])
+{
+	int		i, j;
+	int		blist_idx;
+
+	for (i = 1; i < argc; ++i)
+	  {
+		while (i < argc
+			&& strncmp("-", argv[i], 1) != 0
+			&& strncmp("--", argv[i], 2) != 0)
+			++i;
+
+		if (i >= argc) break;
+
+		if (strcmp("--blacklist", argv[i]) == 0
+			|| strcmp("-B", argv[i]) == 0)
+		  {
+			if (!(user_blacklist = calloc(1, sizeof(char *))))
+			  { log_err("get_options: calloc error"); goto fail; }
+
+			user_blacklist[0] = NULL;
+
+			++i;
+			j = i;
+			blist_idx &= ~blist_idx;
+
+			while (j < argc
+				&& strncmp("-", argv[j], 1) != 0
+				&& strncmp("--", argv[j], 2) != 0)
+			  {
+				if (!(user_blacklist[blist_idx] = calloc(64, 1)))
+				  { log_err("get_options: calloc error"); goto fail; }
+
+				strncpy(user_blacklist[blist_idx], argv[j], strlen(argv[j]));
+				user_blacklist[blist_idx][strlen(argv[j])] = 0;
+
+				++blist_idx;
+
+				++j;
+
+				if (!(user_blacklist = realloc(user_blacklist, ((blist_idx+1) * sizeof(char *)))))
+				  { log_err("get_options: realloc error"); goto fail; }
+			  }
+
+			user_blacklist[blist_idx] = NULL;
+
 			i = (j-1);
 		  }
-		else if ((strncmp("--start", _argv[i], 7) == 0) ||
-		     (strncmp("-s", _argv[i], 2) == 0))
-		  {
-			if (path == NULL)
-				if (!(path = (char *)calloc(1024, sizeof(char))))
-					return(-1);
-			++i;
-			strncpy(path, _argv[i], strlen(_argv[i]));
-			path[strlen(_argv[i])] = 0;
-		  }
-		else if ((strncmp("--nodelete", _argv[i], 10) == 0) ||
-		     (strncmp("-N", _argv[i], 2) == 0))
-		  {
-			NO_DELETE = 1;
-		  }
-		else if ((strncmp("--out", _argv[i], 5) == 0) ||
-		     (strncmp("-o", _argv[i], 2) == 0))
-		  {
-			++i;
-			outfile = _argv[i];
-		  }
-		else if ((strncmp("--hash", _argv[i], 6) == 0) ||
-		     (strncmp("-H", _argv[i], 2) == 0))
-		  {
-			++i;
-			if (strncmp("md5", _argv[i], 3) == 0)
-				HASH_TYPE = __MD5;
-			else if (strncmp("sha1", _argv[i], 4) == 0)
-				HASH_TYPE = __SHA1;
-			else if (strncmp("sha256", _argv[i], 6) == 0)
-				HASH_TYPE = __SHA256;
-			else if (strncmp("sha384", _argv[i], 6) == 0)
-				HASH_TYPE = __SHA384;
-			else if (strncmp("sha512", _argv[i], 6) == 0)
-				HASH_TYPE = __SHA512;
-			else
-				HASH_TYPE = __SHA256;
-		  }
-		else if ((strncmp("--help", _argv[i], 6) == 0) ||
-		     (strncmp("-h", _argv[i], 2) == 0))
-		  {
-			usage();
-		  }
-		else if ((strncmp("--quiet", _argv[i], 7) == 0) ||
-		     (strncmp("-q", _argv[i], 2) == 0))
+		else if (strcmp("--quiet", argv[i]) == 0
+			|| strcmp("-q", argv[i]) == 0)
 		  {
 			QUIET = 1;
 		  }
 	  }
 
-	// NEED TO BLACKLIST SOME DIRECTORIES BY DEFAULT (FOR ME PERSONALLY)
-	if (!blist_on)
-	  {
-		if (!(BLACKLIST = (char **)calloc(6, sizeof(char *))))
-			return(-1);
-		for (i = 0; i < 6; ++i)
-			if (!(BLACKLIST[i] = (char *)calloc(64, sizeof(char))))
-				return(-1);
-		BLACKLIST[5] = NULL;
-		strncpy(BLACKLIST[0], "bin/", 4);
-		strncpy(BLACKLIST[1], "Projects/", 9);
-		strncpy(BLACKLIST[2], "sensible/", 9);
-		strncpy(BLACKLIST[3], "usr/", 4);
-		strncpy(BLACKLIST[4], "etc/", 4);
-	  }
-
 	return(0);
-}
 
-char *
-get_hash_name(int hashtype)
-{
-	switch(hashtype)
+	fail:
+	if (user_blacklist != NULL)
 	  {
-		case(__MD5):
-		return("md5");
-		break;
-		case(__SHA1):
-		return("sha1");
-		break;
-		case(__SHA256):
-		return("sha256");
-		break;
-		case(__SHA384):
-		return("sha384");
-		break;
-		case(__SHA512):
-		return("sha512");
-		break;
-		default:
-		return("sha256");
+		for (i = 0; user_blacklist[i] != NULL; ++i)
+		  {
+			if (user_blacklist[i] != NULL) { free(user_blacklist[i]); user_blacklist[i] = NULL; }
+		  }
+		free(user_blacklist);
+		user_blacklist = NULL;
 	  }
-}
-
-size_t
-get_hash_size(int hashtype)
-{
-	switch(hashtype)
-	  {
-		case(__MD5):
-		return((size_t)(EVP_MD_size(EVP_md5()) * 2));
-		break;
-		case(__SHA1):
-		return((size_t)(EVP_MD_size(EVP_sha1()) * 2));
-		break;
-		case(__SHA256):
-		return((size_t)(EVP_MD_size(EVP_sha256()) * 2));
-		break;
-		case(__SHA384):
-		return((size_t)(EVP_MD_size(EVP_sha384()) * 2));
-		break;
-		case(__SHA512):
-		return((size_t)(EVP_MD_size(EVP_sha512()) * 2));
-		break;
-		default:
-		return((size_t)(EVP_MD_size(EVP_sha256()) * 2));
-	  }
-}
-
-char *
-get_time_str(void)
-{
-	static time_t		seed;
-
-	memset(&TIME, 0, sizeof(TIME));
-	time(&seed);
-	if ((localtime_r(&seed, &TIME)) == NULL)
-		return(NULL);
-	if (strftime(time_str, 50, "%a, %d %b %Y %H:%M:%S %z %Z", &TIME) < 0)
-		return(NULL);
-	return(time_str);
+	return(-1);
 }
 
 void
-usage(void)
+print_stats(void)
 {
+	time_t		time_taken;
+
+	time_taken = (end - start);
+
+	if (time_taken > 3599)
+	  {
+		time_t	minutes;
+		time_t	seconds;
+		time_t	hours;
+
+		hours = (time_taken / 3600);
+		seconds = (time_taken % 3600);
+		minutes = (seconds / 60);
+		seconds -= (minutes * 60);
+
+		fprintf(stdout, "%22s: %ld hour%s %ld minute%s %ld second%s\n",
+			"Time elapsed",
+			hours,
+			(hours==1?"":"s"),
+			minutes,
+			(minutes==1?"":"s"),
+			seconds,
+			(seconds==1?"":"s"));
+	  }
+	else if (time_taken > 59)
+	  {
+		time_t	minutes;
+		time_t	seconds;
+
+		minutes = (time_taken / 60);
+		seconds = (time_taken % 60);
+
+		fprintf(stdout, "%22s: %ld minute%s %ld second%s\n",
+			"Time elapsed",
+			minutes,
+			(minutes==1?"":"s"),
+			seconds,
+			(seconds==1?"":"s"));
+	  }
+	else
+	  {
+		fprintf(stdout, "%22s: %ld second%s\n",
+			"Time elapsed",
+			time_taken,
+			(time_taken==1?"":"s"));
+	  }
+
 	fprintf(stdout,
-		"pollux [OPTIONS]\n\n"
-		"  -s, --start		Specify the starting directory\n"
-		"			 + only absolute paths are permitted because Pollux needs to check the\n"
-		"			 + entire directory path for keywords in order to avoid traversing\n"
-		"			 + into blacklisted directories\n"
-		"  -B, --blacklist	Specify keywords to blacklist; will not descend into any directories\n"
-		"			 + containing these keywords (e.g., \"bin\", \"lib\", \"usr\").\n"
-		"  -H, --hash		Specify the hash digest to use\n"
-		"			 + Choices are \"md5\", \"sha1\", \"sha256\", \"sha384\", \"sha512\"\n"
-		"			 + (Default is sha256)\n"
-		"  -N, --nodelete	Do not delete any of the duplicates found, simply list them\n"
-		"  -o, --out		 + Specify output file to print the results to (the default outfile is\n"
-		"			 + called \"removed_duplicates_\'TIMESTAMP\'.txt\").\n"
-		"  -q, --quiet		Do not print anything to stdout\n"
-		"  -h, --help		Print this information menu\n");
-	exit(0);
+		"%22s: %d\n"
+		"%22s: %d\n"
+		"%22s: %.2lf %s\n"
+		"%22s: %.2lf %s\n"
+		"%22s: %.2lf%%\n",
+		"Files scanned", files_scanned,
+		"Duplicate files", dup_files,
+		"Used memory",
+		(used_bytes>999999999999999?(double)used_bytes/(double)1000000000000000:
+		 used_bytes>999999999999?(double)used_bytes/(double)1000000000000:
+		 used_bytes>999999999?(double)used_bytes/(double)1000000000:
+		 used_bytes>999999?(double)used_bytes/(double)1000000:
+		 used_bytes>999?(double)used_bytes/(double)1000:used_bytes),
+		(used_bytes>999999999999999?"PB":
+		 used_bytes>999999999999?"TB":
+		 used_bytes>999999999?"GB":
+		 used_bytes>999999?"MB":
+		 used_bytes>999?"KB":"bytes"),
+		"Wasted memory",
+		(wasted_bytes>999999999999999?(double)wasted_bytes/(double)1000000000000000:
+		 wasted_bytes>999999999999?(double)wasted_bytes/(double)1000000000000:
+		 wasted_bytes>999999999?(double)wasted_bytes/(double)1000000000:
+		 wasted_bytes>999999?(double)wasted_bytes/(double)1000000:
+		 wasted_bytes>999?(double)wasted_bytes/(double)1000:wasted_bytes),
+		(wasted_bytes>999999999999999?"PB":
+		 wasted_bytes>999999999999?"TB":
+		 wasted_bytes>999999999?"GB":
+		 wasted_bytes>999999?"MB":
+		 wasted_bytes>999?"KB":"bytes"),
+		"Wasted/Used",
+		((double)wasted_bytes/(double)used_bytes)*100);
+
+	return;
 }
