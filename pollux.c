@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <ctype.h>
 #include <errno.h>
 #include <dirent.h>
 #include <hashlib.h>
@@ -15,6 +16,7 @@
 #include <unistd.h>
 
 #define MAXLINE		1024
+#define TMP_FILE	"/tmp/.dup_files.txt"
 
 struct NODE
 {
@@ -31,14 +33,18 @@ typedef struct NODE Node;
 
 /* Option flags */
 int		QUIET;
+int		NO_DELETE;
 
 struct stat	cur_file_stats;
 Node		*root = NULL;
 int		files_scanned;
 int		dup_files;
+int		tmp_fd;
+FILE		*tmp_fp;
 uint64_t	used_bytes;
 uint64_t	wasted_bytes;
 time_t		start, end;
+char		*path = NULL;
 struct rlimit	rlims;
 char		**user_blacklist = NULL;
 char *illegal_terms[] = 
@@ -66,9 +72,12 @@ char *illegal_terms[] =
 	(char *)NULL
   };
 
-int insert_file(Node **, char *, size_t) __nonnull ((1,2)) __wur;
+static char line_buf[MAXLINE];
+
+int insert_file(Node **, char *, size_t, FILE *) __nonnull ((1,2,4)) __wur;
 void free_tree(Node **) __nonnull ((1));
 int scan_dirs(char *) __nonnull ((1)) __wur;
+int remove_which(char *, char *) __nonnull ((1,2)) __wur;
 void log_err(char *, ...) __nonnull ((1));
 void signal_handler(int) __attribute__ ((__noreturn__));
 void pollux_init(void) __attribute__ ((constructor));
@@ -87,9 +96,20 @@ main(int argc, char *argv[])
 	  { fprintf(stderr, "%s does not exist!\n", argv[1]); goto fail; }
 
 	QUIET &= ~QUIET;
+	NO_DELETE &= ~NO_DELETE;
 
 	if (get_options(argc, argv) < 0)
 		goto fail;
+
+	if (!NO_DELETE)
+	  {
+		if ((tmp_fd = open(TMP_FILE, O_RDWR|O_CREAT|O_TRUNC, S_IRWXU & ~S_IXUSR)) < 0)
+		  { log_err("main: open error"); goto fail; }
+		if (!(tmp_fp = fdopen(tmp_fd, "r+")))
+		  { log_err("main: fdopen error"); goto fail; }
+		if (setvbuf(tmp_fp, NULL, _IONBF, 0) < 0)
+		  { log_err("main: setvbuf error"); goto fail; }
+	  }
 
 	if (QUIET)
 	  {
@@ -105,13 +125,29 @@ main(int argc, char *argv[])
 		close(fd);
 	  }
 
+	if (!(path = calloc((MAXLINE*2), 1)))
+	  { log_err("main: calloc error"); goto fail; }
+
+	strncpy(path, argv[1], strlen(argv[1]));
+	path[strlen(argv[1])] = 0;
+
 	printf(">>> Pollux v1.0 <<<\n");
-	printf("[+] Starting scan in %s *\n\n", argv[1]);
+	printf("Starting scan in %s\n\n", argv[1]);
 
 	time(&start);
-	r = scan_dirs(argv[1]);
+	r = scan_dirs(path);
 	time(&end);
 
+	//sync();
+
+	lseek(tmp_fd, 0, SEEK_SET);
+	while (fgets(line_buf, MAXLINE, tmp_fp) != NULL)
+	  {
+		strip_crnl(line_buf);
+		unlink(line_buf);
+	  }
+
+	unlink(TMP_FILE);
 	print_stats();
 
 	if (r < 0) exit(EXIT_FAILURE);
@@ -153,7 +189,7 @@ scan_dirs(char *path)
 			return(0);
 		  }
 
-		log_err("scan_dirs: opendir error");
+		log_err("scan_dirs: opendir error (line %d)", __LINE__);
 	  }
 
 	//fprintf(stdout, "Scanning %s\n", path);
@@ -191,14 +227,14 @@ scan_dirs(char *path)
 
 		memset(&cur_file_stats, 0, sizeof(cur_file_stats));
 		if (lstat(path, &cur_file_stats) < 0)
-		  { log_err("scan_dirs: lstat error for %s", path); goto fail; }
+		  { log_err("scan_dirs: lstat error for %s (line %d)", path, __LINE__); goto fail; }
 
 		if (S_ISREG(cur_file_stats.st_mode))
 		  {
 			++files_scanned;
 			used_bytes += cur_file_stats.st_size;
 
-			if (insert_file(&root, path, cur_file_stats.st_size) < 0)
+			if (insert_file(&root, path, cur_file_stats.st_size, tmp_fp) < 0)
 				return(-1);
 		  }
 		else if (S_ISDIR(cur_file_stats.st_mode))
@@ -206,7 +242,7 @@ scan_dirs(char *path)
 			dir_position = telldir(dp);
 			closedir(dp);
 			dp = NULL;
-			for (i = 3; i < rlims.rlim_cur; ++i) close(i);
+			for (i = (tmp_fd+1); i < rlims.rlim_cur; ++i) close(i);
 
 			if (scan_dirs(path) < 0)
 				return(-1);
@@ -214,7 +250,7 @@ scan_dirs(char *path)
 			path[n] = 0;
 
 			if (!(dp = opendir(path)))
-			  { log_err("scan_dirs: opendir error"); goto fail; }
+			  { log_err("scan_dirs: opendir error (line %d)", __LINE__); goto fail; }
 
 			seekdir(dp, dir_position);
 		  }
@@ -234,7 +270,7 @@ scan_dirs(char *path)
 }
 
 int
-insert_file(Node **root, char *fname, size_t size)
+insert_file(Node **root, char *fname, size_t size, FILE *fp)
 {
 	int		i;
 	unsigned char	*cur_file_hash = NULL;
@@ -266,10 +302,10 @@ insert_file(Node **root, char *fname, size_t size)
 	  }
 
 	if (size < (*root)->size)
-		insert_file(&(*root)->l, fname, size);
+		insert_file(&(*root)->l, fname, size, fp);
 
 	else if (size > (*root)->size)
-		insert_file(&(*root)->r, fname, size);
+		insert_file(&(*root)->r, fname, size, fp);
 
 	else // possible duplicate file
 	  {
@@ -322,7 +358,8 @@ insert_file(Node **root, char *fname, size_t size)
 			++dup_files;
 
 			int		choice;
-			char		*tmp = NULL;
+
+			/*char		*tmp = NULL;
 			char		*p = NULL, *q = NULL;
 			size_t		l1, l2;
 
@@ -372,19 +409,44 @@ insert_file(Node **root, char *fname, size_t size)
 
 			made_choice:
 
-			if (tmp != NULL) { free(tmp); tmp = NULL; }
+			if (tmp != NULL) { free(tmp); tmp = NULL; }*/
 
-			fprintf(stdout,
-				"|| %s%s%s\n"
-				"|| %s%s%s\n"
-				" =>[\e[38;5;10m%s\e[m]\n\n",
-				(choice==1?"\e[9;38;5;88m":""),
-				fname,
-				(choice==1?"\e[m":""),
-				(choice==2?"\e[9;38;5;88m":""),
-				(*root)->name,
-				(choice==2?"\e[m":""),
-				hash_hex);
+			choice = remove_which(fname, (*root)->name);
+			if (choice < 0) goto fail;
+
+			if (NO_DELETE == 0)
+			  {
+				if (choice == 1)
+				  {
+					fprintf(fp, "%s\n", fname);
+				  }
+				else
+			  	  {
+					fprintf(fp, "%s\n", (*root)->name);
+			  	  }
+
+				fprintf(stdout,
+					"|| %s%s%s\n"
+					"|| %s%s%s\n"
+					" =>[\e[38;5;10m%s\e[m]\n\n",
+					(choice==1?"\e[9;38;5;88m":""),
+					fname,
+					(choice==1?"\e[m":""),
+					(choice==2?"\e[9;38;5;88m":""),
+					(*root)->name,
+					(choice==2?"\e[m":""),
+					hash_hex);
+			  }
+			else
+			  {
+				fprintf(stdout,
+					"|| %s\n"
+					"|| %s\n"
+					" =>[\e[38;5;10m%s\e[m]\n\n",
+					fname,
+					(*root)->name,
+					hash_hex);
+			  }
 
 			goto fini;
 		  }
@@ -434,7 +496,7 @@ insert_file(Node **root, char *fname, size_t size)
 						++dup_files;
 
 						int		choice;
-						char		*tmp = NULL;
+						/*char		*tmp = NULL;
 						char		*p = NULL, *q = NULL;
 						size_t		l1, l2;
 
@@ -483,9 +545,23 @@ insert_file(Node **root, char *fname, size_t size)
 
 						made_choice2:
 
-						if (tmp != NULL) { free(tmp); tmp = NULL; }
+						if (tmp != NULL) { free(tmp); tmp = NULL; }*/
 
-						fprintf(stdout,
+						choice = remove_which(fname, (*root)->s[i].name);
+						if (choice < 0) goto fail;
+
+						if (NO_DELETE == 0)
+						  {
+							if (choice == 1)
+							  {
+								fprintf(fp, "%s\n", fname);
+							  }
+							else
+						  	  {
+								fprintf(fp, "%s\n", (*root)->s[i].name);
+						  	  }
+
+							fprintf(stdout,
 							"|| %s%s%s\n"
 							"|| %s%s%s\n"
 							" =>[\e[38;5;10m%s\e[m]\n\n",
@@ -496,6 +572,17 @@ insert_file(Node **root, char *fname, size_t size)
 							((*root)->s[i]).name,
 							(choice==2?"\e[m":""),
 							hash_hex);
+						  }
+						else
+						  {
+							fprintf(stdout,
+							"|| %s\n"
+							"|| %s\n"
+							" =>[\e[38;5;10m%s\e[m]\n\n",
+							fname,
+							((*root)->s[i]).name,
+							hash_hex);
+						  }
 
 						goto fini;
 					  }
@@ -688,6 +775,11 @@ get_options(int argc, char *argv[])
 
 			i = (j-1);
 		  }
+		else if (strcmp("--nodelete", argv[i]) == 0
+			|| strcmp("-N", argv[i]) == 0)
+		  {
+			NO_DELETE = 1;
+		  }
 		else if (strcmp("--quiet", argv[i]) == 0
 			|| strcmp("-q", argv[i]) == 0)
 		  {
@@ -767,7 +859,7 @@ print_stats(void)
 		"%22s: %.2lf %s\n"
 		"%22s: %.2lf%%\n",
 		"Files scanned", files_scanned,
-		"Duplicate files", dup_files,
+		(NO_DELETE?"Duplicate files":"Removed files"), dup_files,
 		"Used memory",
 		(used_bytes>999999999999999?(double)used_bytes/(double)1000000000000000:
 		 used_bytes>999999999999?(double)used_bytes/(double)1000000000000:
@@ -779,7 +871,7 @@ print_stats(void)
 		 used_bytes>999999999?"GB":
 		 used_bytes>999999?"MB":
 		 used_bytes>999?"KB":"bytes"),
-		"Wasted memory",
+		(NO_DELETE?"Wasted memory":"Freed memory"),
 		(wasted_bytes>999999999999999?(double)wasted_bytes/(double)1000000000000000:
 		 wasted_bytes>999999999999?(double)wasted_bytes/(double)1000000000000:
 		 wasted_bytes>999999999?(double)wasted_bytes/(double)1000000000:
@@ -790,8 +882,83 @@ print_stats(void)
 		 wasted_bytes>999999999?"GB":
 		 wasted_bytes>999999?"MB":
 		 wasted_bytes>999?"KB":"bytes"),
-		"Wasted/Used",
+		(NO_DELETE?"Wasted/Used":"Freed/Used"),
 		((double)wasted_bytes/(double)used_bytes)*100);
 
 	return;
+}
+
+int
+remove_which(char *c1, char *c2)
+{
+	char		*tmp = NULL, *p = NULL, *q = NULL;
+	size_t		l1, l2;
+	int		choice;
+
+	if (strstr(c1, "/Temporary")) return(1);
+	else if (strstr(c2, "/Temporary")) return(2);
+
+	if (strstr(c1, "$RECYCLE")) return(1);
+	else if (strstr(c2, "$RECYCLE")) return(2);
+
+	if (strstr(c1, "Trash")) return(1);
+	else if (strstr(c2, "Trash")) return(2);
+
+	l1 = strlen(c1);
+
+	q = (c1 + (l1 - 1));
+	p = q;
+	while (*p != 0x2f && p > (c1 + 1)) --p;
+	++p;
+
+	if (!(tmp = calloc((q - p)+1, 1))) { log_err("remove_which: calloc error"); goto fail; }
+
+	strncpy(tmp, p, (q - p));
+	tmp[(q - p)] = 0;
+
+	l1 = (q - p);
+
+	if ((p = strchr(tmp, 0x28)))
+	  {
+		if ((*(p+2) == 0x29) && isdigit(*(p+1))) // (1) ... (2) etc
+		  { choice = 1; goto made_choice; }
+	  }
+	else
+	  {
+		l2 = strlen(c2);
+
+		q = (c2 + (l2 - 1));
+		p = q;
+		while (*p != 0x2f && p > (c2 + 1)) --p;
+		++p;
+
+		free(tmp); tmp = NULL;
+
+		if (!(tmp = calloc((q - p)+1, 1)))
+		  { log_err("remove_which: calloc error"); goto fail; }
+
+		strncpy(tmp, p, (q - p));
+		tmp[(q - p)] = 0;
+
+		l2 = (q - p);
+
+		if ((p = strchr(tmp, 0x28)))
+		  {
+			if ((*(p+2) == 0x29) && isdigit(*(p+1)))
+			  { choice = 2; goto made_choice; }
+		  }
+	  }
+
+	if (l1 < l2) choice = 1;
+	else if (l2 < l1) choice = 2;
+	else choice = 1;
+
+	made_choice:
+
+	if (tmp != NULL) { free(tmp); tmp = NULL; }
+	return(choice);
+
+	fail:
+	if (tmp != NULL) { free(tmp); tmp = NULL; }
+	return(-1);
 }
