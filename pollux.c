@@ -119,7 +119,8 @@ main(int argc, char *argv[])
 	  {
 		int		fd;
 
-		if (!(fd = open("/dev/null", O_RDWR))) { log_err("main: open error"); goto fail; }
+		if ((fd = open("/dev/null", O_RDWR)) < 0)
+		  { log_err("main: open error"); goto fail; }
 
 		if (fd != STDOUT_FILENO)
 			dup2(fd, STDOUT_FILENO);
