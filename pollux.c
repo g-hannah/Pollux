@@ -207,6 +207,7 @@ scan_dirs(char *path)
 	long		dir_position;
 	int		i;
 	int		illegal;
+	register int	loop_cnt;
 
 	n = strlen(path);
 
@@ -240,8 +241,11 @@ scan_dirs(char *path)
 
 	illegal &= ~illegal;
 
+	loop_cnt &= ~loop_cnt;
+
 	while ((dinf = readdir(dp)) != NULL)
 	  {
+		++loop_cnt;
 		debug("in main loop: path %s", path);
 
 		if (strcmp(".", dinf->d_name) == 0
@@ -295,10 +299,14 @@ scan_dirs(char *path)
 			dir_position = telldir(dp);
 			closedir(dp);
 			dp = NULL;
-			if (NO_DELETE)
-				for (i = 3; i < rlims.rlim_cur; ++i) close(i);
-			else
-				for (i = (tmp_fd+1); i < rlims.rlim_cur; ++i) close(i);
+
+			if ((loop_cnt % 50) == 0)
+			  {
+				if (NO_DELETE)
+					for (i = 3; i < rlims.rlim_cur; ++i) close(i);
+				else
+					for (i = (tmp_fd+1); i < rlims.rlim_cur; ++i) close(i);
+			  }
 
 			debug("descending into %s", path);
 
