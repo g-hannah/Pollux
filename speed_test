@@ -23,7 +23,7 @@
 
 function remove_leftovers()
 {
-	echo "+++ Removing any leftover test files... +++"
+	echo "Removing any leftover test files..."
 	cd "./TESTING"
 
 	y=0
@@ -42,7 +42,7 @@ function remove_leftovers()
 
 function create_files()
 {
-	echo "+++ Creating ${NUM_FILES} files in 10 folders +++"
+	echo "Creating ${NUM_FILES} files in 10 folders..."
 
 	cd "./TESTING"
 
@@ -72,7 +72,8 @@ function create_files()
 	cd "../"
 
 	TOTAL_FILES=$(( ${NUM_FILES} * 10 ))
-	echo -e "+++ Speed test for \e[48;5;0m\e[38;5;9m${1}\e[m: ${TOTAL_FILES} total files +++"
+	echo;
+	echo -en "+++ Speed test for \e[38;5;9m${1}\e[m: ${TOTAL_FILES} total files +++"
 }
 
 [[ ! -e "${PWD}/TESTING" ]] && mkdir "${PWD}/TESTING"
@@ -88,10 +89,14 @@ fi
 z=0
 NUM_FILES=1000
 while [[ $z -lt 4 ]]; do
+	if [[ $z -gt 0 ]]; then
+		echo; echo;
+	fi
 	remove_leftovers
 	create_files "pollux"
 	time "./pollux" "./TESTING" "--quiet"
 
+	echo; echo;
 	remove_leftovers
 	create_files "pollux0"
 	time "./pollux0" "./TESTING" "--quiet"
@@ -100,4 +105,5 @@ while [[ $z -lt 4 ]]; do
 	z=$(( $z + 1 ))
 done
 
+echo; echo;
 remove_leftovers
