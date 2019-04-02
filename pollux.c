@@ -310,6 +310,10 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 	char		*h = NULL;
 	char		*hash_hex = NULL;
 	Node		*nptr = NULL;
+	size_t		l, rl;
+
+	l = strlen(fname);
+	rl = ((l + 0xf) & ~(0xf));
 
 	if (*root == NULL)
 	  {
@@ -318,11 +322,11 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 
 		memset(*root, 0, sizeof(Node));
 
-		if (!((*root)->name = calloc(MAXLINE, 1)))
+		if (!((*root)->name = calloc(rl, 1)))
 		  { log_err("insert_file: calloc error"); goto fail; }
 
-		strncpy((*root)->name, fname, strlen(fname));
-		(*root)->name[strlen(fname)] = 0;
+		strncpy((*root)->name, fname, l);
+		(*root)->name[l] = 0;
 		(*root)->size = size;
 		(*root)->l = NULL;
 		(*root)->r = NULL;
@@ -340,7 +344,7 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 
 	else // possible duplicate file
 	  {
-		if (!(hash_hex = calloc((EVP_MAX_MD_SIZE*2)+1, 1))) { log_err("insert_file: calloc error"); goto fail; }
+		if (!(hash_hex = calloc(HASH_SIZE+1, 1))) { log_err("insert_file: calloc error"); goto fail; }
 
 		if (!(cur_file_hash = get_sha256_file(fname)))
 		  {
@@ -405,11 +409,11 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 
 				(*root)->array = 1;
 
-				if (!(((*root)->s[0]).name = calloc(MAXLINE, 1)))
+				if (!(((*root)->s[0]).name = calloc(rl, 1)))
 				  { log_err("insert_file: calloc error"); goto fail; }
 
-				strncpy((*root)->s[0].name, fname, strlen(fname));
-				((*root)->s[0]).name[strlen(fname)] = 0;
+				strncpy((*root)->s[0].name, fname, l);
+				((*root)->s[0]).name[l] = 0;
 
 				strncpy((*root)->s[0].hash, hash_hex, HASH_SIZE);
 
@@ -477,10 +481,10 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 				nptr->r = NULL;
 				nptr->s = NULL;
 
-				if (!(nptr->name = calloc(MAXLINE, 1)))
+				if (!(nptr->name = calloc(rl, 1)))
 				  { log_err("insert_file: malloc error"); goto fail; }
-				strncpy(nptr->name, fname, strlen(fname));
-				nptr->name[strlen(fname)] = 0;
+				strncpy(nptr->name, fname, l);
+				nptr->name[l] = 0;
 
 				strncpy(nptr->hash, hash_hex, HASH_SIZE);
 
