@@ -4,6 +4,15 @@
 #include <dirent.h>
 #include <hashlib.h>
 #include <misclib.h>
+#ifndef HEADER_CONF_H
+# include <openssl/conf.h>
+#endif
+#ifndef HEADER_ERR_H
+# include <openssl/err.h>
+#endif
+#ifndef HEADER_ENVELOPE_H
+# include <openssl/evp.h>
+#endif
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -16,8 +25,8 @@
 #include <unistd.h>
 
 #define MAXLINE		1024
-#define HASH_SIZE	64 // sha256 in hexadecimal format
 #define TMP_FILE	"/tmp/.dup_files.txt"
+#define HASH_SIZE	64 // sha256 in string format
 #define ARROW_COL	"\e[38;5;13m"
 
 struct NODE
@@ -364,7 +373,7 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 
 		strncpy(hash_hex, h, HASH_SIZE);
 
-		if ((*root)->array == 0)
+		if ((*root)->hash == NULL)
 		  {
 			if (!(comp_file_hash = get_sha256_file((*root)->name)))
 		  	  {
@@ -384,7 +393,7 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 			strncpy((*root)->hash, h, HASH_SIZE);
 		  }
 
-		if (strncmp(hash_hex, (*root)->hash, (EVP_MD_size(EVP_sha256()) * 2)) == 0) // duplicate files
+		if (strncmp(hash_hex, (*root)->hash, HASH_SIZE) == 0) // duplicate files
 		  {
 			wasted_bytes += cur_file_stats.st_size;
 			++dup_files;
