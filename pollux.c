@@ -31,7 +31,7 @@ struct NODE
 	struct NODE	*l;
 	struct NODE	*r;
 	struct NODE	*s;
-	char		hash[HASH_SIZE+4];
+	char		hash[HASH_SIZE];
 };
 
 typedef struct NODE Node;
@@ -78,7 +78,10 @@ char *illegal_terms[] =
 	(char *)NULL
   };
 
-static char line_buf[MAXLINE];
+//static char line_buf[MAXLINE];
+char		*line_buf = NULL;
+unsigned char	*hash_buf = NULL;
+char		*block = NULL;
 
 struct winsize	winsz;
 int		max_col;
@@ -90,7 +93,7 @@ int print_and_decide(char *, char *, char *, FILE *) __nonnull ((1,2,3,4)) __wur
 int remove_which(char *, char *) __nonnull ((1,2)) __wur;
 unsigned char *get_sha256_file(char *) __nonnull ((1)) __wur;
 void strip_crnl(char *) __nonnull ((1));
-char *hexlify(unsigned char *, size_t) __nonnull ((1)) __wur;
+inline char *hexlify(unsigned char *, size_t) __nonnull ((1)) __wur;
 
 void log_err(char *, ...) __nonnull ((1));
 void debug(char *, ...) __nonnull ((1));
@@ -413,7 +416,6 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 		    	  { log_err("insert_file: hexlify error"); goto fail; }
 
 			strncpy((*root)->hash, h, HASH_SIZE);
-			(*root)->hash[HASH_SIZE] = 0;
 		  }
 
 		if (strncmp(hash_hex, (*root)->hash, HASH_SIZE) == 0) // duplicate files
@@ -449,7 +451,6 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 				((*root)->s[0]).name[l] = 0;
 
 				strncpy((*root)->s[0].hash, hash_hex, HASH_SIZE);
-				(*root)->s[0].hash[HASH_SIZE] = 0;
 
 				((*root)->s[0]).size = size;
 				((*root)->s[0]).array = 0;
@@ -521,7 +522,6 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 				nptr->name[l] = 0;
 
 				strncpy(nptr->hash, hash_hex, HASH_SIZE);
-				nptr->hash[HASH_SIZE] = 0;
 
 				nptr->size = size;
 			  }
@@ -646,7 +646,16 @@ pollux_init(void)
 	signal(SIGQUIT, signal_handler);
 
 	if (!(path = calloc((MAXLINE*2), 1)))
-	  { log_err("main: calloc error"); goto fail; }
+	  { log_err("pollux_init: calloc error"); goto fail; }
+
+	if (!(line_buf = calloc(MAXLINE, 1)))
+	  { log_err("pollux_init: calloc error"); goto fail; }
+
+	if (!(hash_buf = calloc(32, 1)))
+	  { log_err("pollux_init: calloc error"); goto fail; }
+
+	if (!(block = calloc(208, 1)))
+	  { log_err("pollux_init: calloc error"); goto fail; }
 
 	return;
 
@@ -660,6 +669,9 @@ pollux_fini(void)
 	if (root) free_tree(&root);
 
 	if (path != NULL) { free(path); path = NULL; }
+	if (line_buf != NULL) { free(line_buf); line_buf = NULL; }
+	if (hash_buf != NULL) { free(hash_buf); hash_buf = NULL; }
+	if (block != NULL) { free(block); block = NULL; }
 }
 
 int
@@ -949,8 +961,6 @@ get_sha256_file(char *fname)
 	struct stat		statb;
 	size_t			toread;
 	ssize_t			nbytes;
-	static char		block[64];
-	static unsigned char	hash[32];
 
 	memset(&statb, 0, sizeof(statb));
 	if (lstat(fname, &statb) < 0) goto fail;
@@ -963,18 +973,18 @@ get_sha256_file(char *fname)
 
 	toread = statb.st_size;
 
-	while (toread > 0 && (nbytes = read(fd, block, 32)) > 0)
+	while (toread > 0 && (nbytes = read(fd, block, 192)) > 0)
 	  {
 		block[nbytes] = 0;
 		if (1 != EVP_DigestUpdate(ctx, block, nbytes)) goto fail;
 		toread -= nbytes;
 	  }
 
-	if (1 != EVP_DigestFinal_ex(ctx, hash, &hashlen)) goto fail;
+	if (1 != EVP_DigestFinal_ex(ctx, hash_buf, &hashlen)) goto fail;
 
 	close(fd);
 	if (ctx != NULL) { EVP_MD_CTX_destroy(ctx); ctx = NULL; }
-	return(hash);
+	return(hash_buf);
 
 	fail:
 	_errno = errno;
