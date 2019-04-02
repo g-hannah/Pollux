@@ -654,7 +654,7 @@ pollux_init(void)
 	if (!(hash_buf = calloc(32, 1)))
 	  { log_err("pollux_init: calloc error"); goto fail; }
 
-	if (!(block = calloc(208, 1)))
+	if (!(block = calloc(1040, 1)))
 	  { log_err("pollux_init: calloc error"); goto fail; }
 
 	return;
@@ -973,7 +973,7 @@ get_sha256_file(char *fname)
 
 	toread = statb.st_size;
 
-	while (toread > 0 && (nbytes = read(fd, block, 192)) > 0)
+	while (toread > 0 && (nbytes = read(fd, block, 1024)) > 0)
 	  {
 		block[nbytes] = 0;
 		if (1 != EVP_DigestUpdate(ctx, block, nbytes)) goto fail;
