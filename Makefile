@@ -2,7 +2,7 @@ CC=gcc
 CFILES=pollux.c
 OFILES=pollux.o
 WFLAGS=-Wall -Werror
-LIBS=-lcrypto -lhashlib -lmisclib
+LIBS=-lcrypto
 
 pollux: $(OFILES)
 	$(CC) $(WFLAGS) -O2 -o pollux $(OFILES) $(LIBS)
