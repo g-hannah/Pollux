@@ -1,23 +1,17 @@
 #include <assert.h>
 #include <ctype.h>
-#include <errno.h>
 #include <dirent.h>
-#include <hashlib.h>
-#include <misclib.h>
-#ifndef HEADER_CONF_H
-# include <openssl/conf.h>
-#endif
-#ifndef HEADER_ERR_H
-# include <openssl/err.h>
-#endif
-#ifndef HEADER_ENVELOPE_H
-# include <openssl/evp.h>
-#endif
+#include <errno.h>
+#include <fcntl.h>
+#include <openssl/conf.h>
+#include <openssl/err.h>
+#include <openssl/evp.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <sys/resource.h>
 #include <sys/ioctl.h>
@@ -94,6 +88,10 @@ void free_tree(Node **) __nonnull ((1));
 int scan_dirs(char *) __nonnull ((1)) __wur;
 int print_and_decide(char *, char *, char *, FILE *) __nonnull ((1,2,3,4)) __wur;
 int remove_which(char *, char *) __nonnull ((1,2)) __wur;
+unsigned char *get_sha256_file(char *) __nonnull ((1)) __wur;
+void strip_crnl(char *) __nonnull ((1));
+char *hexlify(unsigned char *, size_t) __nonnull ((1)) __wur;
+
 void log_err(char *, ...) __nonnull ((1));
 void debug(char *, ...) __nonnull ((1));
 void signal_handler(int) __attribute__ ((__noreturn__));
@@ -273,7 +271,11 @@ scan_dirs(char *path)
 
 		memset(&cur_file_stats, 0, sizeof(cur_file_stats));
 		if (lstat(path, &cur_file_stats) < 0)
-		  { log_err("scan_dirs: lstat error for %s (line %d)", path, __LINE__); goto fail; }
+		  {
+			if (errno == EACCES) continue;
+
+			log_err("scan_dirs: lstat error for %s (line %d)", path, __LINE__); goto fail;
+		  }
 
 		if (S_ISREG(cur_file_stats.st_mode))
 		  {
@@ -387,7 +389,7 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 			goto fail;
 		  }
 
-		if (!(h = hexlify((char *)cur_file_hash, (HASH_SIZE >> 1))))
+		if (!(h = hexlify(cur_file_hash, (HASH_SIZE >> 1))))
 		  { log_err("insert_file: hexlify error"); goto fail; }
 
 		strncpy(hash_hex, h, HASH_SIZE);
@@ -407,7 +409,7 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 				goto fail;
 		 	   }
 
-			if (!(h = hexlify((char *)comp_file_hash, (HASH_SIZE >> 1))))
+			if (!(h = hexlify(comp_file_hash, (HASH_SIZE >> 1))))
 		    	  { log_err("insert_file: hexlify error"); goto fail; }
 
 			strncpy((*root)->hash, h, HASH_SIZE);
@@ -935,4 +937,100 @@ print_and_decide(char *hash, char *f1, char *f2, FILE *fp)
 	  }
 
 	return(0);
+}
+
+unsigned char *
+get_sha256_file(char *fname)
+{
+	EVP_MD_CTX		*ctx = NULL;
+	int			fd = -1;
+	int			_errno;
+	unsigned int		hashlen;
+	struct stat		statb;
+	size_t			toread;
+	ssize_t			nbytes;
+	static char		block[64];
+	static unsigned char	hash[32];
+
+	memset(&statb, 0, sizeof(statb));
+	if (lstat(fname, &statb) < 0) goto fail;
+
+	if ((fd = open(fname, O_RDONLY)) < 0) goto fail;
+
+	if (!(ctx = EVP_MD_CTX_create())) goto fail;
+
+	if (1 != EVP_DigestInit_ex(ctx, EVP_sha256(), NULL)) goto fail;
+
+	toread = statb.st_size;
+
+	while (toread > 0 && (nbytes = read(fd, block, 32)) > 0)
+	  {
+		block[nbytes] = 0;
+		if (1 != EVP_DigestUpdate(ctx, block, nbytes)) goto fail;
+		toread -= nbytes;
+	  }
+
+	if (1 != EVP_DigestFinal_ex(ctx, hash, &hashlen)) goto fail;
+
+	close(fd);
+	if (ctx != NULL) { EVP_MD_CTX_destroy(ctx); ctx = NULL; }
+	return(hash);
+
+	fail:
+	_errno = errno;
+	close(fd);
+	if (ctx != NULL) { EVP_MD_CTX_destroy(ctx); ctx = NULL; }
+	errno = _errno;
+	return(NULL);
+}
+
+void
+strip_crnl(char *line)
+{
+	char	*p = NULL;
+	size_t	l;
+
+	l = strlen(line);
+
+	p = (line + (l - 1));
+
+	if (*p != 0x0a && *p != 0x0d) return;
+
+	while ((*p == 0x0d || *p == 0x0a) && p > (line + 1)) --p;
+
+	++p;
+
+	*p = 0;
+
+	return;
+}
+
+char *
+hexlify(unsigned char *data, size_t len)
+{
+	char	c;
+	int	i, k;
+
+	k &= ~k;
+
+	for (i = 0; i < len; ++i)
+	  {
+		c = ((data[i] >> 0x4) & 0x0f);
+		if (c < 0x0a)
+			c += 0x30;
+		else
+			c += 0x57;
+		line_buf[k++] = c;
+
+		c = (data[i] & 0x0f);
+		if (c < 0x0a)
+			c += 0x30;
+		else
+			c += 0x57;
+		line_buf[k++] = c;
+	  }
+
+	line_buf[k] = 0;
+
+	return(line_buf);
 }
