@@ -16,7 +16,9 @@
 #include <unistd.h>
 
 #define MAXLINE		1024
+#define HASH_SIZE	64 // sha256 in hexadecimal format
 #define TMP_FILE	"/tmp/.dup_files.txt"
+#define ARROW_COL	"\e[38;5;13m"
 
 struct NODE
 {
@@ -26,7 +28,7 @@ struct NODE
 	struct NODE	*l;
 	struct NODE	*r;
 	struct NODE	*s;
-	char		*hash;
+	char		hash[HASH_SIZE];
 };
 
 typedef struct NODE Node;
@@ -34,6 +36,7 @@ typedef struct NODE Node;
 /* Option flags */
 int		QUIET;
 int		NO_DELETE;
+int		DEBUG;
 
 struct stat	cur_file_stats;
 Node		*root = NULL;
@@ -77,8 +80,10 @@ static char line_buf[MAXLINE];
 int insert_file(Node **, char *, size_t, FILE *) __nonnull ((1,2,4)) __wur;
 void free_tree(Node **) __nonnull ((1));
 int scan_dirs(char *) __nonnull ((1)) __wur;
+int print_and_decide(char *, char *, char *, FILE *) __nonnull ((1,2,3,4)) __wur;
 int remove_which(char *, char *) __nonnull ((1,2)) __wur;
 void log_err(char *, ...) __nonnull ((1));
+void debug(char *, ...) __nonnull ((1));
 void signal_handler(int) __attribute__ ((__noreturn__));
 void pollux_init(void) __attribute__ ((constructor));
 void pollux_fini(void) __attribute__ ((destructor));
@@ -89,14 +94,13 @@ int
 main(int argc, char *argv[])
 {
 	int 	r;
-	int	k;
-	time_t	time_taken;
 
 	if (access(argv[1], F_OK) != 0)
 	  { fprintf(stderr, "%s does not exist!\n", argv[1]); goto fail; }
 
 	QUIET &= ~QUIET;
 	NO_DELETE &= ~NO_DELETE;
+	DEBUG &= ~DEBUG;
 
 	if (get_options(argc, argv) < 0)
 		goto fail;
@@ -125,29 +129,36 @@ main(int argc, char *argv[])
 		close(fd);
 	  }
 
-	if (!(path = calloc((MAXLINE*2), 1)))
-	  { log_err("main: calloc error"); goto fail; }
 
 	strncpy(path, argv[1], strlen(argv[1]));
 	path[strlen(argv[1])] = 0;
 
-	printf(">>> Pollux v1.0 <<<\n");
+	printf(">>> Pollux v1.0 %s<<<\n",
+		(DEBUG?"(Debug Mode)":""));
+
 	printf("Starting scan in %s\n\n", argv[1]);
 
 	time(&start);
 	r = scan_dirs(path);
 	time(&end);
 
+	debug("Scan ended with ret %d\n", r);
+
 	//sync();
 
-	lseek(tmp_fd, 0, SEEK_SET);
-	while (fgets(line_buf, MAXLINE, tmp_fp) != NULL)
+	if (!NO_DELETE)
 	  {
-		strip_crnl(line_buf);
-		unlink(line_buf);
+		lseek(tmp_fd, 0, SEEK_SET);
+		while (fgets(line_buf, MAXLINE, tmp_fp) != NULL)
+	  	  {
+			strip_crnl(line_buf);
+			unlink(line_buf);
+	  	  }
+
+		unlink(TMP_FILE);
 	  }
 
-	unlink(TMP_FILE);
+	debug("printing stats");
 	print_stats();
 
 	if (r < 0) exit(EXIT_FAILURE);
@@ -164,7 +175,6 @@ scan_dirs(char *path)
 	DIR		*dp = NULL;
 	struct dirent	*dinf = NULL;
 	long		dir_position;
-	long		next_position;
 	int		i;
 	int		illegal;
 
@@ -181,6 +191,8 @@ scan_dirs(char *path)
 
 	n_sv = n;
 
+	debug("scanning %s", path);
+
 	if (!(dp = opendir(path)))
 	  {
 		if (errno == EACCES);
@@ -192,16 +204,22 @@ scan_dirs(char *path)
 		log_err("scan_dirs: opendir error (line %d)", __LINE__);
 	  }
 
+	debug("opened %s", path);
+
 	//fprintf(stdout, "Scanning %s\n", path);
 
 	illegal &= ~illegal;
 
 	while ((dinf = readdir(dp)) != NULL)
 	  {
+		debug("in main loop: path %s", path);
+
 		if (strcmp(".", dinf->d_name) == 0
 		    || strcmp("..", dinf->d_name) == 0
 		    || dinf->d_name[0] == '.')
-			continue;
+		  { debug("continuing (%s)", dinf->d_name); continue; }
+
+		debug("file %s", dinf->d_name);
 
 		strncpy((path + n), dinf->d_name, strlen(dinf->d_name));
 		*(path + n + strlen(dinf->d_name)) = 0;
@@ -209,7 +227,7 @@ scan_dirs(char *path)
 		for (i = 0; illegal_terms[i] != NULL; ++i)
 		  {
 			if (strstr(path, illegal_terms[i]))
-				illegal = 1;
+			  { debug("illegal term (%s) in path (%s)", illegal_terms[i], path); illegal = 1; }
 		  }
 
 		if (illegal) { illegal &= ~illegal; continue; }		
@@ -219,7 +237,7 @@ scan_dirs(char *path)
 			for (i = 0; user_blacklist[i] != NULL; ++i)
 		  	  {
 				if (strstr(path, user_blacklist[i]))
-					illegal = 1;
+				  { debug("blacklisted term (%s) in path (%s)", user_blacklist[i], path); illegal = 1; }
 		  	  }
 
 			if (illegal) { illegal &= ~illegal; continue; }
@@ -234,6 +252,8 @@ scan_dirs(char *path)
 			++files_scanned;
 			used_bytes += cur_file_stats.st_size;
 
+			debug("adding file %s to tree", path);
+
 			if (insert_file(&root, path, cur_file_stats.st_size, tmp_fp) < 0)
 				return(-1);
 		  }
@@ -242,12 +262,22 @@ scan_dirs(char *path)
 			dir_position = telldir(dp);
 			closedir(dp);
 			dp = NULL;
-			for (i = (tmp_fd+1); i < rlims.rlim_cur; ++i) close(i);
+			if (NO_DELETE)
+				for (i = 3; i < rlims.rlim_cur; ++i) close(i);
+			else
+				for (i = (tmp_fd+1); i < rlims.rlim_cur; ++i) close(i);
+
+			debug("descending into %s", path);
 
 			if (scan_dirs(path) < 0)
+			  {
+				log_err("scan_dirs() returned -1");
 				return(-1);
+			  }
 
 			path[n] = 0;
+
+			debug("reopening %s", path);
 
 			if (!(dp = opendir(path)))
 			  { log_err("scan_dirs: opendir error (line %d)", __LINE__); goto fail; }
@@ -260,6 +290,8 @@ scan_dirs(char *path)
 		  }
 
 	  }
+
+	debug("finished main loop");
 
 	path[n_sv] = 0;
 	return(0);
@@ -292,7 +324,6 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 		strncpy((*root)->name, fname, strlen(fname));
 		(*root)->name[strlen(fname)] = 0;
 		(*root)->size = size;
-		(*root)->hash = NULL;
 		(*root)->l = NULL;
 		(*root)->r = NULL;
 		(*root)->s = NULL;
@@ -302,10 +333,10 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 	  }
 
 	if (size < (*root)->size)
-		insert_file(&(*root)->l, fname, size, fp);
+	  { if (insert_file(&(*root)->l, fname, size, fp) < 0) return(-1); }
 
 	else if (size > (*root)->size)
-		insert_file(&(*root)->r, fname, size, fp);
+	  { if (insert_file(&(*root)->r, fname, size, fp) < 0) return(-1); }
 
 	else // possible duplicate file
 	  {
@@ -323,10 +354,10 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 			goto fail;
 		  }
 
-		if (!(h = hexlify((char *)cur_file_hash, EVP_MD_size(EVP_sha256()))))
+		if (!(h = hexlify((char *)cur_file_hash, (HASH_SIZE >> 1))))
 		  { log_err("insert_file: hexlify error"); goto fail; }
 
-		strncpy(hash_hex, h, (EVP_MD_size(EVP_sha256()) * 2));
+		strncpy(hash_hex, h, HASH_SIZE);
 
 		if ((*root)->array == 0)
 		  {
@@ -342,14 +373,10 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 				goto fail;
 		 	   }
 
-			if (!(h = hexlify(comp_file_hash, EVP_MD_size(EVP_sha256()))))
+			if (!(h = hexlify((char *)comp_file_hash, (HASH_SIZE >> 1))))
 		    	  { log_err("insert_file: hexlify error"); goto fail; }
 
-			if (!((*root)->hash = calloc((EVP_MAX_MD_SIZE*2)+1, 1)))
-			  { log_err("insert_file: calloc error"); goto fail; }
-
-			strncpy((*root)->hash, h, (EVP_MD_size(EVP_sha256())*2));
-			(*root)->hash[(EVP_MD_size(EVP_sha256())*2)] = 0;
+			strncpy((*root)->hash, h, HASH_SIZE);
 		  }
 
 		if (strncmp(hash_hex, (*root)->hash, (EVP_MD_size(EVP_sha256()) * 2)) == 0) // duplicate files
@@ -357,96 +384,8 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 			wasted_bytes += cur_file_stats.st_size;
 			++dup_files;
 
-			int		choice;
-
-			/*char		*tmp = NULL;
-			char		*p = NULL, *q = NULL;
-			size_t		l1, l2;
-
-			if (strstr(fname, "/Temporary")) { choice = 1; goto made_choice; }
-			else if (strstr((*root)->name, "/Temporary")) { choice = 2; goto made_choice; }
-
-			if (strstr(fname, "$RECYCLE")) { choice = 1; goto made_choice; }
-			else if (strstr((*root)->name, "$RECYCLE")) { choice = 2; goto made_choice; }
-			
-			if (strstr(fname, "Trash") && strstr(fname, ".local")) { choice = 1; goto made_choice; }
-			else if (strstr((*root)->name, "Trash") && strstr((*root)->name, ".local"))
-			  { choice = 2; goto made_choice; }
-
-			l1 = strlen(fname);
-			l2 = strlen((*root)->name);
-
-			q = (fname + (l1 - 1));
-			p = q;
-			while (*p != 0x2f && p > (fname + 1)) --p;
-			++p;
-
-			if (!(tmp = calloc(256, 1))) { log_err("insert_file: calloc error"); goto fail; }
-			strncpy(tmp, p, ((q - p)>=256?255:(q - p)));
-			tmp[((q - p)>=256?255:(q - p))] = 0;
-
-			if (strstr(tmp, "(1)") || strstr(tmp, "(2)")) { choice = 1; goto made_choice; }
-
-			l1 = (q - p);
-
-			q = ((*root)->name + (l2 - 1));
-			p = q;
-			while (*p != 0x2f && p > ((*root)->name + 1)) --p;
-			++p;
-
-			strncpy(tmp, p, ((q - p)>=256?255:(q - p)));
-			tmp[((q - p)>=256?255:(q - p))] = 0;
-
-			if (strstr(tmp, "(1)") || strstr(tmp, "(2)")) { choice = 2; goto made_choice; }
-
-			l2 = (q - p);
-
-			if (tmp != NULL) { free(tmp); tmp = NULL; }
-
-			if (l1 < l2) choice = 1;
-			else if (l2 < l1) choice = 2;
-			else choice = 1;
-
-			made_choice:
-
-			if (tmp != NULL) { free(tmp); tmp = NULL; }*/
-
-			choice = remove_which(fname, (*root)->name);
-			if (choice < 0) goto fail;
-
-			if (NO_DELETE == 0)
-			  {
-				if (choice == 1)
-				  {
-					fprintf(fp, "%s\n", fname);
-				  }
-				else
-			  	  {
-					fprintf(fp, "%s\n", (*root)->name);
-			  	  }
-
-				fprintf(stdout,
-					"|| %s%s%s\n"
-					"|| %s%s%s\n"
-					" =>[\e[38;5;10m%s\e[m]\n\n",
-					(choice==1?"\e[9;38;5;88m":""),
-					fname,
-					(choice==1?"\e[m":""),
-					(choice==2?"\e[9;38;5;88m":""),
-					(*root)->name,
-					(choice==2?"\e[m":""),
-					hash_hex);
-			  }
-			else
-			  {
-				fprintf(stdout,
-					"|| %s\n"
-					"|| %s\n"
-					" =>[\e[38;5;10m%s\e[m]\n\n",
-					fname,
-					(*root)->name,
-					hash_hex);
-			  }
+			if (print_and_decide(hash_hex, fname, (*root)->name, fp) == -1)
+			  { log_err("insert_file: print_and_decide error"); goto fail; }
 
 			goto fini;
 		  }
@@ -472,11 +411,7 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 				strncpy((*root)->s[0].name, fname, strlen(fname));
 				((*root)->s[0]).name[strlen(fname)] = 0;
 
-				if (!(((*root)->s[0]).hash = calloc((EVP_MAX_MD_SIZE*2)+1, 1)))
-				  { log_err("insert_file: calloc error"); goto fail; }
-
-				strncpy((*root)->s[0].hash, hash_hex, (EVP_MD_size(EVP_sha256())*2));
-				((*root)->s[0]).hash[(EVP_MD_size(EVP_sha256())*2)] = 0;
+				strncpy((*root)->s[0].hash, hash_hex, HASH_SIZE);
 
 				((*root)->s[0]).size = size;
 				((*root)->s[0]).array = 0;
@@ -488,101 +423,42 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 			  }
 			else
 			  {
-				for (i = 0; i < (*root)->array; ++i)
+				/* compare FNAME with two at a time each iteration */
+				for (i = 0; i < ((*root)->array - 1); i+=2)
 				  {
-					if (strncmp(hash_hex, ((*root)->s[i]).hash, EVP_MD_size(EVP_sha256())*2) == 0)
+					if (strncmp(hash_hex, ((*root)->s[i]).hash, HASH_SIZE) == 0)
 		 			  {
 						wasted_bytes += cur_file_stats.st_size;
 						++dup_files;
 
-						int		choice;
-						/*char		*tmp = NULL;
-						char		*p = NULL, *q = NULL;
-						size_t		l1, l2;
+						if (print_and_decide(hash_hex, fname, (*root)->s[i].name, fp) == -1)
+						  { log_err("insert_file: print_and_decide error"); goto fail; }
 
-						if (strstr(fname, "/Temporary")) { choice = 1; goto made_choice2; }
-						else if (strstr((*root)->s[i].name, "/Temporary")) { choice = 2; goto made_choice2; }
+						goto fini;
+					  }
+					else if (strncmp(hash_hex, ((*root)->s[i+1]).hash, HASH_SIZE) == 0)
+					  {
+						wasted_bytes += cur_file_stats.st_size;
+						++dup_files;
 
-						if (strstr(fname, "$RECYCLE")) { choice = 1; goto made_choice2; }
-						else if (strstr((*root)->s[i].name, "$RECYCLE")) { choice = 2; goto made_choice2; }
-			
-						if (strstr(fname, "Trash") && strstr(fname, ".local")) { choice = 1; goto made_choice2; }
-						else if (strstr((*root)->s[i].name, "Trash") && strstr((*root)->s[i].name, ".local"))
-			  			  { choice = 2; goto made_choice2; }
+						if (print_and_decide(hash_hex, fname, (*root)->s[i+1].name, fp) == -1)
+						  { log_err("insert_file: print_and_decide error"); goto fail; }
 
-						l1 = strlen(fname);
-						l2 = strlen((*root)->s[i].name);
+						goto fini;
+					  }
+					else { continue; }
+				  }
 
-						q = (fname + (l1 - 1));
-						p = q;
-						while (*p != 0x2f && p > (fname + 1)) --p;
-						++p;
+				// 0 1 2 3 4
+				if (i < (*root)->array)
+				  {
+					if (strncmp(hash_hex, ((*root)->s[i]).hash, HASH_SIZE) == 0)
+					  {
+						wasted_bytes += cur_file_stats.st_size;
+						++dup_files;
 
-						if (!(tmp = calloc(256, 1))) { log_err("insert_file: calloc error"); goto fail; }
-						strncpy(tmp, p, ((q - p)>=256?255:(q - p)));
-						tmp[((q - p)>=256?255:(q - p))] = 0;
-
-						if (strstr(tmp, "(1)") || strstr(tmp, "(2)")) { choice = 1; goto made_choice2; }
-						l1 = (q - p);
-
-						q = ((*root)->s[i].name + (l2 - 1));
-						p = q;
-						while (*p != 0x2f && p > ((*root)->s[i].name + 1)) --p;
-						++p;
-
-						strncpy(tmp, p, ((q - p)>=256?255:(q - p)));
-						tmp[((q - p)>=256?255:(q - p))] = 0;
-
-						if (strstr(tmp, "(1)") || strstr(tmp, "(2)")) { choice = 2; goto made_choice2; }
-
-						l2 = (q - p);
-
-						if (tmp != NULL) { free(tmp); tmp = NULL; }
-
-						if (l1 < l2) choice = 1;
-						else if (l2 < l1) choice = 2;
-						else choice = 1;
-
-						made_choice2:
-
-						if (tmp != NULL) { free(tmp); tmp = NULL; }*/
-
-						choice = remove_which(fname, (*root)->s[i].name);
-						if (choice < 0) goto fail;
-
-						if (NO_DELETE == 0)
-						  {
-							if (choice == 1)
-							  {
-								fprintf(fp, "%s\n", fname);
-							  }
-							else
-						  	  {
-								fprintf(fp, "%s\n", (*root)->s[i].name);
-						  	  }
-
-							fprintf(stdout,
-							"|| %s%s%s\n"
-							"|| %s%s%s\n"
-							" =>[\e[38;5;10m%s\e[m]\n\n",
-							(choice==1?"\e[9;38;5;88m":""),
-							fname,
-							(choice==1?"\e[m":""),
-							(choice==2?"\e[9;38;5;88m":""),
-							((*root)->s[i]).name,
-							(choice==2?"\e[m":""),
-							hash_hex);
-						  }
-						else
-						  {
-							fprintf(stdout,
-							"|| %s\n"
-							"|| %s\n"
-							" =>[\e[38;5;10m%s\e[m]\n\n",
-							fname,
-							((*root)->s[i]).name,
-							hash_hex);
-						  }
+						if (print_and_decide(hash_hex, fname, (*root)->s[i].name, fp) == -1)
+						  { log_err("insert_file: print_and_decide error"); goto fail; }
 
 						goto fini;
 					  }
@@ -600,18 +476,13 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 				nptr->l = NULL;
 				nptr->r = NULL;
 				nptr->s = NULL;
-				nptr->hash = NULL;
 
 				if (!(nptr->name = calloc(MAXLINE, 1)))
 				  { log_err("insert_file: malloc error"); goto fail; }
 				strncpy(nptr->name, fname, strlen(fname));
 				nptr->name[strlen(fname)] = 0;
 
-				if (!(nptr->hash = calloc((EVP_MAX_MD_SIZE*2)+1, 1)))
-				  { log_err("insert_file: calloc error"); goto fail; }
-
-				strncpy(nptr->hash, hash_hex, (EVP_MD_size(EVP_sha256())*2));
-				nptr->hash[(EVP_MD_size(EVP_sha256())*2)] = 0;
+				strncpy(nptr->hash, hash_hex, HASH_SIZE);
 
 				nptr->size = size;
 			  }
@@ -645,8 +516,6 @@ free_tree(Node **root)
 		  {
 			if (((*root)->s[i]).name != NULL)
 			  { free(((*root)->s[i]).name); ((*root)->s[i]).name = NULL; }
-			if (((*root)->s[i]).hash != NULL)
-			  { free(((*root)->s[i]).hash); ((*root)->s[i]).hash = NULL; }
 		  }
 
 		(*root)->array = 0;
@@ -675,6 +544,29 @@ log_err(char *fmt, ...)
 	fprintf(stderr, "%s (%s)\n", tmp, strerror(errno));
 
 	if (tmp != NULL) { free(tmp); tmp = NULL; }
+	return;
+}
+
+void
+debug(char *fmt, ...)
+{
+	va_list		args;
+	char		*tmp = NULL;
+
+	if (DEBUG)
+	  {
+		tmp = calloc(MAXLINE, 1);
+		memset(tmp, 0, MAXLINE);
+
+		va_start(args, fmt);
+		vsprintf(tmp, fmt, args);
+		va_end(args);
+
+		fprintf(stderr, "[debug]: %s\n", tmp);
+
+		if (tmp != NULL) { free(tmp); tmp = NULL; }
+	  }
+
 	return;
 }
 
@@ -714,6 +606,9 @@ pollux_init(void)
 	signal(SIGINT, signal_handler);
 	signal(SIGQUIT, signal_handler);
 
+	if (!(path = calloc((MAXLINE*2), 1)))
+	  { log_err("main: calloc error"); goto fail; }
+
 	return;
 
 	fail:
@@ -724,6 +619,8 @@ void
 pollux_fini(void)
 {
 	if (root) free_tree(&root);
+
+	if (path != NULL) { free(path); path = NULL; }
 }
 
 int
@@ -784,6 +681,15 @@ get_options(int argc, char *argv[])
 			|| strcmp("-q", argv[i]) == 0)
 		  {
 			QUIET = 1;
+		  }
+		else if (strcmp("--debug", argv[i]) == 0
+			|| strcmp("-D", argv[i]) == 0)
+		  {
+			DEBUG = 1;
+		  }
+		else
+		  {
+			continue;
 		  }
 	  }
 
@@ -939,4 +845,53 @@ remove_which(char *c1, char *c2)
 
 	made_choice:
 	return(choice);
+}
+
+int
+print_and_decide(char *hash, char *f1, char *f2, FILE *fp)
+{
+	int		choice;
+
+	if (!NO_DELETE)
+	  {
+		choice = remove_which(f1, f2);
+		if (choice < 0) { return(-1); }
+
+		if (choice == 1) fprintf(fp, "%s\n", f1);
+		else fprintf(fp, "%s\n", f2);
+
+		fprintf(stdout,
+			"%s _\e[m %s%s%s\n"
+			"%s|_\e[m %s%s%s\n"
+			"%s|\e[m\n"
+			"%s`--->\e[m[\e[38;5;10m%s\e[m]\n\n",
+			ARROW_COL,
+			(choice==1?"\e[9;38;5;88m":""),
+			f1,
+			(choice==1?"\e[m":""),
+			ARROW_COL,
+			(choice==2?"\e[9;38;5;88m":""),
+			f2,
+			(choice==2?"\e[m":""),
+			ARROW_COL,
+			ARROW_COL,
+			hash);
+	  }
+	else
+	  {
+		fprintf(stdout,
+			"%s _\e[m %s\n"
+			"%s|_\e[m %s\n"
+			"%s|\e[m\n"
+			"%s`--->\e[m[\e[38;5;10m%s\e[m]\n\n",
+			ARROW_COL,
+			f1,
+			ARROW_COL,
+			f2,
+			ARROW_COL,
+			ARROW_COL,
+			hash);
+	  }
+
+	return(0);
 }
