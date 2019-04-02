@@ -94,7 +94,6 @@ while [[ $z -lt 4 ]]; do
 
 	remove_leftovers
 	create_files "pollux0"
-	echo -e "\e[48;5;0m\e[38;5;15m(pollux0)\e[m"
 	time "./pollux0" "./TESTING" "--quiet"
 
 	NUM_FILES=$(( $NUM_FILES * 2 ))
