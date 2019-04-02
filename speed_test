@@ -55,10 +55,6 @@ function create_files()
 				echo "${RANDOM}" > "${RANDOM}.txt"
 			elif [[ $(( $i % 3 )) -eq 0 ]]; then
 				echo "abcdefg" > "${RANDOM}.txt"
-			elif [[ $(( $i % 4 )) -eq 0 ]]; then
-				echo "bcdefgh" > "${RANDOM}.txt"
-			elif [[ $(( $i % 5 )) -eq 0 ]]; then
-				echo "cdefgh" > "${RANDOM}.txt"
 			else
 				echo "${RANDOM}" > "${RANDOM}.txt"
 			fi
