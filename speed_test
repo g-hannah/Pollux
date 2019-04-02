@@ -76,6 +76,7 @@ function create_files()
 	echo -en "+++ Speed test for \e[38;5;9m${1}\e[m: ${TOTAL_FILES} total files +++"
 }
 
+[[ ! -e "${PWD}/pollux0" ]] && echo "*** pollux0 does not exist ***" && exit 1
 [[ ! -e "${PWD}/TESTING" ]] && mkdir "${PWD}/TESTING"
 
 if [[ ! -e "${PWD}/TESTING/0" ]]; then
