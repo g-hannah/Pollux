@@ -5,3 +5,5 @@ pollux
 TESTING
 GUI
 pollux_win.c
+pollux0*
+maketest
