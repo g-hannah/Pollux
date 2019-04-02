@@ -20,7 +20,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/resource.h>
-//#include <sys/ioctl.h>
+#include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -37,7 +37,7 @@ struct NODE
 	struct NODE	*l;
 	struct NODE	*r;
 	struct NODE	*s;
-	char		hash[HASH_SIZE];
+	char		hash[HASH_SIZE+4];
 };
 
 typedef struct NODE Node;
@@ -86,6 +86,9 @@ char *illegal_terms[] =
 
 static char line_buf[MAXLINE];
 
+struct winsize	winsz;
+int		max_col;
+
 int insert_file(Node **, char *, size_t, FILE *) __nonnull ((1,2,4)) __wur;
 void free_tree(Node **) __nonnull ((1));
 int scan_dirs(char *) __nonnull ((1)) __wur;
@@ -113,6 +116,22 @@ main(int argc, char *argv[])
 
 	if (get_options(argc, argv) < 0)
 		goto fail;
+
+	/*
+	 * Might be using Cron to run us, so test first before doing ioctl() for
+	 * TIOCGWINSZ, otherwise it will fail. Getting terminal dimensions needs
+	 * to be done here and not in the constructor function, because they
+	 * are not known before main()
+	 */
+
+	if (isatty(STDOUT_FILENO))
+	  {
+		if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &winsz) < 0)
+		  { log_err("main: ioctl TIOCGWINSZ error"); goto fail; }
+
+		max_col = winsz.ws_col - 6;
+	  }
+	 
 
 	if (!NO_DELETE)
 	  {
@@ -225,8 +244,7 @@ scan_dirs(char *path)
 		debug("in main loop: path %s", path);
 
 		if (strcmp(".", dinf->d_name) == 0
-		    || strcmp("..", dinf->d_name) == 0
-		    || dinf->d_name[0] == '.')
+		    || strcmp("..", dinf->d_name) == 0)
 		  { debug("continuing (%s)", dinf->d_name); continue; }
 
 		debug("file %s", dinf->d_name);
@@ -337,6 +355,7 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 
 		strncpy((*root)->name, fname, l);
 		(*root)->name[l] = 0;
+		(*root)->hash[0] = 0;
 		(*root)->size = size;
 		(*root)->l = NULL;
 		(*root)->r = NULL;
@@ -373,7 +392,8 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 
 		strncpy(hash_hex, h, HASH_SIZE);
 
-		if ((*root)->hash == NULL)
+		if ((*root)->hash[0] == 0)
+		//if ((*root)->hash == NULL)
 		  {
 			if (!(comp_file_hash = get_sha256_file((*root)->name)))
 		  	  {
@@ -391,6 +411,7 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 		    	  { log_err("insert_file: hexlify error"); goto fail; }
 
 			strncpy((*root)->hash, h, HASH_SIZE);
+			(*root)->hash[HASH_SIZE] = 0;
 		  }
 
 		if (strncmp(hash_hex, (*root)->hash, HASH_SIZE) == 0) // duplicate files
@@ -426,6 +447,7 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 				((*root)->s[0]).name[l] = 0;
 
 				strncpy((*root)->s[0].hash, hash_hex, HASH_SIZE);
+				(*root)->s[0].hash[HASH_SIZE] = 0;
 
 				((*root)->s[0]).size = size;
 				((*root)->s[0]).array = 0;
@@ -497,6 +519,7 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 				nptr->name[l] = 0;
 
 				strncpy(nptr->hash, hash_hex, HASH_SIZE);
+				nptr->hash[HASH_SIZE] = 0;
 
 				nptr->size = size;
 			  }
@@ -777,7 +800,7 @@ print_stats(void)
 		"%22s: %d\n"
 		"%22s: %.2lf %s\n"
 		"%22s: %.2lf %s\n"
-		"%22s: %.2lf%%\n",
+		"%22s: %.4lf%%\n",
 		"Files scanned", files_scanned,
 		(NO_DELETE?"Duplicate files":"Removed files"), dup_files,
 		"Used memory",
@@ -875,16 +898,18 @@ print_and_decide(char *hash, char *f1, char *f2, FILE *fp)
 		else fprintf(fp, "%s\n", f2);
 
 		fprintf(stdout,
-			"%s _\e[m %s%s%s\n"
-			"%s|_\e[m %s%s%s\n"
+			"%s _\e[m %s%.*s%s\n"
+			"%s|_\e[m %s%.*s%s\n"
 			"%s|\e[m\n"
 			"%s`--->\e[m[\e[38;5;10m%s\e[m]\n\n",
 			ARROW_COL,
 			(choice==1?"\e[9;38;5;88m":""),
+			max_col,
 			f1,
 			(choice==1?"\e[m":""),
 			ARROW_COL,
 			(choice==2?"\e[9;38;5;88m":""),
+			max_col,
 			f2,
 			(choice==2?"\e[m":""),
 			ARROW_COL,
@@ -894,13 +919,15 @@ print_and_decide(char *hash, char *f1, char *f2, FILE *fp)
 	else
 	  {
 		fprintf(stdout,
-			"%s _\e[m %s\n"
-			"%s|_\e[m %s\n"
+			"%s _\e[m %.*s\n"
+			"%s|_\e[m %.*s\n"
 			"%s|\e[m\n"
 			"%s`--->\e[m[\e[38;5;10m%s\e[m]\n\n",
 			ARROW_COL,
+			max_col,
 			f1,
 			ARROW_COL,
+			max_col,
 			f2,
 			ARROW_COL,
 			ARROW_COL,
