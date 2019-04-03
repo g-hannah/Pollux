@@ -209,6 +209,7 @@ scan_dirs(char *path)
 	long		dir_position;
 #endif
 	int		i;
+	int		dfd;
 	int		illegal;
 	register int	loop_cnt;
 
@@ -227,7 +228,21 @@ scan_dirs(char *path)
 
 	debug("scanning %s", path);
 
-	if (!(dp = opendir(path)))
+	if ((dfd = open(path, O_RDONLY)) < 0)
+	  {
+		if (errno == EACCES) return(0);
+
+		log_err("scan_dirs: failed to open %s (line %d)", path, __LINE__);
+		goto fail;
+	  }
+
+	if (!(dp = fdopendir(dfd)))
+	  {
+		log_err("scan_dirs: failed open %s from fd (line %d)", path, __LINE__);
+		goto fail;
+	  }
+
+	/*if (!(dp = fdopendir(open(path, O_RDONLY))))
 	  {
 		if (errno == EACCES)
 		  {
@@ -236,7 +251,7 @@ scan_dirs(char *path)
 		  }
 
 		log_err("scan_dirs: opendir error (line %d)", __LINE__);
-	  }
+	  }*/
 
 	debug("opened %s", path);
 
@@ -289,6 +304,18 @@ scan_dirs(char *path)
 			log_err("scan_dirs: lstat error for %s (line %d)", path, __LINE__); goto fail;
 		  }
 
+#ifdef __S_IFLNK
+		if (S_ISLNK(cur_file_stats.st_mode)) continue;
+#endif
+
+#ifdef __S_IFSOCK
+		if (S_ISSOCK(cur_file_stats.st_mode)) continue;
+#endif
+
+#ifdef __S_IFCHR
+		if (S_ISCHR(cur_file_stats.st_mode)) continue;
+#endif
+
 		if (S_ISREG(cur_file_stats.st_mode))
 		  {
 			++files_scanned;
@@ -320,7 +347,13 @@ scan_dirs(char *path)
 			if (scan_dirs(path) < 0) goto fail;
 
 			path[n] = 0;
-			if (!(dp = opendir(path))) { log_err("insert_file: opendir error"); goto fail; }
+
+			/* do not need to worry here about open() failing because we
+			 * already previously opened PATH with no problems
+			 */
+			if (!(dp = fdopendir(open(path, O_RDONLY)))) { log_err("insert_file: opendir error"); goto fail; }
+
+			rewinddir(dp);
 
 			dinf = readdir(dp);
 
@@ -351,7 +384,10 @@ scan_dirs(char *path)
 
 			debug("reopening %s", path);
 
-			if (!(dp = opendir(path)))
+			/* do not need to worry here about open() failing because we
+			 * already previously opened PATH with no problems
+			 */
+			if (!(dp = fdopendir(open(path, O_RDONLY))))
 			  { log_err("scan_dirs: opendir error (line %d)", __LINE__); goto fail; }
 
 			seekdir(dp, dir_position);
