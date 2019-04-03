@@ -850,6 +850,30 @@ void
 print_stats(void)
 {
 	time_t		time_taken;
+	char		*stat_file = NULL;
+	int		fd = -1;
+	int		ret = 0;
+
+	if (QUIET)
+	  {
+		char		*home_dir = NULL;
+		/*
+		 * Print stats to file because if Cron is running it for us, we'd like to see
+		 * the result of the scan
+		 */
+
+		home_dir = getenv("HOME");
+
+		if (home_dir)
+		  {
+			stat_file = calloc(pathconf("/", _PC_PATH_MAX), 1);
+			if (stat_file)
+			  {
+				sprintf(stat_file, "%s/pollux_scan_results.txt", home_dir);
+				fd = open(stat_file, O_RDWR|O_CREAT|O_TRUNC, S_IRWXU & ~S_IXUSR);
+			  }
+		  }
+	  }
 
 	time_taken = (end - start);
 
@@ -863,6 +887,22 @@ print_stats(void)
 		seconds = (time_taken % 3600);
 		minutes = (seconds / 60);
 		seconds -= (minutes * 60);
+
+		if (QUIET)
+		  {
+			sprintf(line_buf,
+				"%22s: %ld hour%s %ld minute%s %ld second%s\n",
+				"Time elapsed",
+				hours,
+				(hours==1?"":"s"),
+				minutes,
+				(minutes==1?"":"s"),
+				seconds,
+				(seconds==1?"":"s"));
+
+			if (fd > 0)
+				ret = write(fd, line_buf, strlen(line_buf));
+		  }
 
 		fprintf(stdout, "%22s: %ld hour%s %ld minute%s %ld second%s\n",
 			"Time elapsed",
@@ -881,6 +921,20 @@ print_stats(void)
 		minutes = (time_taken / 60);
 		seconds = (time_taken % 60);
 
+		if (QUIET)
+		  {
+			sprintf(line_buf,
+				"%22s: %ld minute%s %ld second%s\n",
+				"Time elapsed",
+				minutes,
+				(minutes==1?"":"s"),
+				seconds,
+				(seconds==1?"":"s"));
+
+			if (fd > 0)
+				ret = write(fd, line_buf, strlen(line_buf));
+		  }
+
 		fprintf(stdout, "%22s: %ld minute%s %ld second%s\n",
 			"Time elapsed",
 			minutes,
@@ -890,11 +944,68 @@ print_stats(void)
 	  }
 	else
 	  {
+		if (QUIET)
+		  {
+			sprintf(line_buf,
+				"%22s: %ld second%s\n",
+				"Time elapsed",
+				time_taken,
+				(time_taken==1?"":"s"));
+
+			if (fd > 0)
+				ret = write(fd, line_buf, strlen(line_buf));
+		  }
+
 		fprintf(stdout, "%22s: %ld second%s\n",
 			"Time elapsed",
 			time_taken,
 			(time_taken==1?"":"s"));
 	  }
+
+	if (QUIET)
+	  {
+		sprintf(line_buf,
+			"%22s: %d\n"
+			"%22s: %d\n"
+			"%22s: %.2lf %s\n"
+			"%22s: %.2lf %s\n"
+			"%22s: %.4lf%%\n",
+			"Files scanned", files_scanned,
+			(NO_DELETE?"Duplicate files":"Removed files"), dup_files,
+			"Used memory",
+			(used_bytes>999999999999999?(double)used_bytes/(double)1000000000000000:
+		 	used_bytes>999999999999?(double)used_bytes/(double)1000000000000:
+		 	used_bytes>999999999?(double)used_bytes/(double)1000000000:
+		 	used_bytes>999999?(double)used_bytes/(double)1000000:
+		 	used_bytes>999?(double)used_bytes/(double)1000:used_bytes),
+			(used_bytes>999999999999999?"PB":
+		 	used_bytes>999999999999?"TB":
+		 	used_bytes>999999999?"GB":
+		 	used_bytes>999999?"MB":
+		 	used_bytes>999?"KB":"bytes"),
+			(NO_DELETE?"Wasted memory":"Freed memory"),
+			(wasted_bytes>999999999999999?(double)wasted_bytes/(double)1000000000000000:
+		 	wasted_bytes>999999999999?(double)wasted_bytes/(double)1000000000000:
+		 	wasted_bytes>999999999?(double)wasted_bytes/(double)1000000000:
+		 	wasted_bytes>999999?(double)wasted_bytes/(double)1000000:
+		 	wasted_bytes>999?(double)wasted_bytes/(double)1000:wasted_bytes),
+			(wasted_bytes>999999999999999?"PB":
+		 	wasted_bytes>999999999999?"TB":
+		 	wasted_bytes>999999999?"GB":
+		 	wasted_bytes>999999?"MB":
+		 	wasted_bytes>999?"KB":"bytes"),
+			(NO_DELETE?"Wasted/Used":"Freed/Used"),
+			((double)wasted_bytes/(double)used_bytes)*100);
+
+			if (fd > 0)
+				ret = write(fd, line_buf, strlen(line_buf));
+	  }
+
+	/*
+	 * Want to avoid the compiler complaining about the unused result of write()
+	 * so resetting to zero and using it in an add operation in the following
+	 */
+	ret &= ~ret;
 
 	fprintf(stdout,
 		"%22s: %d\n"
@@ -903,7 +1014,7 @@ print_stats(void)
 		"%22s: %.2lf %s\n"
 		"%22s: %.4lf%%\n",
 		"Files scanned", files_scanned,
-		(NO_DELETE?"Duplicate files":"Removed files"), dup_files,
+		(NO_DELETE?"Duplicate files":"Removed files"), (dup_files+ret),
 		"Used memory",
 		(used_bytes>999999999999999?(double)used_bytes/(double)1000000000000000:
 		 used_bytes>999999999999?(double)used_bytes/(double)1000000000000:
