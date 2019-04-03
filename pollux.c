@@ -40,6 +40,7 @@ typedef struct NODE Node;
 int		QUIET;
 int		NO_DELETE;
 int		DEBUG;
+int		IGNORE_HIDDEN;
 
 struct stat	cur_file_stats;
 Node		*root = NULL;
@@ -252,6 +253,8 @@ scan_dirs(char *path)
 		    || strcmp("..", dinf->d_name) == 0)
 		  { debug("continuing (%s)", dinf->d_name); continue; }
 
+		if (IGNORE_HIDDEN) { if (dinf->d_name[0] == 0x2e) continue; }
+
 		debug("file %s", dinf->d_name);
 
 		strncpy((path + n), dinf->d_name, strlen(dinf->d_name));
@@ -296,6 +299,36 @@ scan_dirs(char *path)
 		  }
 		else if (S_ISDIR(cur_file_stats.st_mode))
 		  {
+#ifdef __APPLE__
+			static char		cur_file_name[MAXLINE];
+
+			strncpy(cur_file_name, dinf->d_name, strlen(dinf->d_name));
+			cur_file_name[strlen(dinf->d_name)] = 0;
+
+			closedir(dp);
+
+			if ((loop_cnt % 50) == 0)
+			  {
+				if (NO_DELETE)
+					for (i = 3; i < rlims.rlim_cur; ++i) close(i);
+				else
+					for (i = (tmp_fd+1); i < rlims.rlim_cur; ++i) close(i);
+			  }
+
+			if (scan_dirs(path) < 0) goto fail;
+
+			path[n] = 0;
+			if (!(dp = opendir(path))) { log_err("insert_file: opendir error"); goto fail; }
+
+			dinf = readdir(dp);
+
+			if (! dinf) goto fini;
+
+			while (strcmp(dinf->d_name, cur_file_name) != 0 && dinf)
+				dinf = readdir(dp);
+
+			if (! dinf) goto fail;
+#else
 			dir_position = telldir(dp);
 			closedir(dp);
 			dp = NULL;
@@ -310,11 +343,7 @@ scan_dirs(char *path)
 
 			debug("descending into %s", path);
 
-			if (scan_dirs(path) < 0)
-			  {
-				log_err("scan_dirs() returned -1");
-				return(-1);
-			  }
+			if (scan_dirs(path) < 0) goto fail;
 
 			path[n] = 0;
 
@@ -324,6 +353,7 @@ scan_dirs(char *path)
 			  { log_err("scan_dirs: opendir error (line %d)", __LINE__); goto fail; }
 
 			seekdir(dp, dir_position);
+#endif
 		  }
 		else
 		  {
@@ -738,6 +768,10 @@ get_options(int argc, char *argv[])
 			|| strcmp("-N", argv[i]) == 0)
 		  {
 			NO_DELETE = 1;
+		  }
+		else if (strcmp("--nohidden", argv[i]) == 0)
+		  {
+			IGNORE_HIDDEN = 1;
 		  }
 		else if (strcmp("--quiet", argv[i]) == 0
 			|| strcmp("-q", argv[i]) == 0)
