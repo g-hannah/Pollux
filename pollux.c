@@ -205,7 +205,9 @@ scan_dirs(char *path)
 	size_t		n, n_sv;
 	DIR		*dp = NULL;
 	struct dirent	*dinf = NULL;
+#ifndef __APPLE__
 	long		dir_position;
+#endif
 	int		i;
 	int		illegal;
 	register int	loop_cnt;
@@ -327,7 +329,7 @@ scan_dirs(char *path)
 			while (strcmp(dinf->d_name, cur_file_name) != 0 && dinf)
 				dinf = readdir(dp);
 
-			if (! dinf) goto fail;
+			if (! dinf) goto fini;
 #else
 			dir_position = telldir(dp);
 			closedir(dp);
@@ -364,6 +366,9 @@ scan_dirs(char *path)
 
 	debug("finished main loop");
 
+#ifdef __APPLE__
+	fini:
+#endif
 	path[n_sv] = 0;
 	return(0);
 
