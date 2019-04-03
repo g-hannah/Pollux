@@ -226,7 +226,7 @@ scan_dirs(char *path)
 
 	if (!(dp = opendir(path)))
 	  {
-		if (errno == EACCES);
+		if (errno == EACCES)
 		  {
 			//fprintf(stderr, "%s (\e[38;5;9mPermission denied\e[m)\n\n", path);
 			return(0);
