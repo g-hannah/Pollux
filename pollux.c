@@ -646,6 +646,9 @@ pollux_init(void)
 	files_scanned &= ~files_scanned;
 	dup_files &= ~dup_files;
 
+	OPENSSL_config(NULL);
+	OpenSSL_add_all_digests();
+
 	memset(&rlims, 0, sizeof(rlims));
 	if (getrlimit(RLIMIT_NOFILE, &rlims) < 0)
 	  { log_err("pollux_init: getrlimit error"); goto fail; }
