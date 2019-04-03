@@ -1,4 +1,3 @@
-#include <assert.h>
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -80,7 +79,6 @@ char *illegal_terms[] =
 	(char *)NULL
   };
 
-//static char line_buf[MAXLINE];
 char		*line_buf = NULL;
 unsigned char	*hash_buf = NULL;
 char		*block = NULL;
@@ -244,23 +242,9 @@ scan_dirs(char *path)
 		goto fail;
 	  }
 
-	/*if (!(dp = fdopendir(open(path, O_RDONLY))))
-	  {
-		if (errno == EACCES)
-		  {
-			//fprintf(stderr, "%s (\e[38;5;9mPermission denied\e[m)\n\n", path);
-			return(0);
-		  }
-
-		log_err("scan_dirs: opendir error (line %d)", __LINE__);
-	  }*/
-
 	debug("opened %s", path);
 
-	//fprintf(stdout, "Scanning %s\n", path);
-
 	illegal &= ~illegal;
-
 	loop_cnt &= ~loop_cnt;
 
 	while ((dinf = readdir(dp)) != NULL)
@@ -464,10 +448,7 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 		if (!(cur_file_hash = get_sha256_file(fname)))
 		  {
 			if (errno == EACCES)
-			  {
-				//fprintf(stderr, "%s (\e[38;5;9mPermission denied\e[m)\n\n", fname);
 				goto fini;
-			  }
 
 			log_err("insert_file: get_sha256_file error");
 			goto fail;
@@ -479,15 +460,11 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 		strncpy(hash_hex, h, HASH_SIZE);
 
 		if ((*root)->hash[0] == 0)
-		//if ((*root)->hash == NULL)
 		  {
 			if (!(comp_file_hash = get_sha256_file((*root)->name)))
 		  	  {
 				if (errno == EACCES)
-			  	  {
-					//fprintf(stderr, "%s (\e[38;5;9mPermission denied\e[m)\n\n", fname);
 					goto fini;
-			  	  }
 
 				log_err("insert_file: get_sha256_file_r error");
 				goto fail;
@@ -569,7 +546,6 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 					else { continue; }
 				  }
 
-				// 0 1 2 3 4
 				if (i < (*root)->array)
 				  {
 					if (strncmp(hash_hex, ((*root)->s[i]).hash, HASH_SIZE) == 0)
