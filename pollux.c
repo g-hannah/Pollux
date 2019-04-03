@@ -19,7 +19,7 @@
 #include <unistd.h>
 
 #define MAXLINE		1024
-#define BLK_SIZE	4096
+#define BLK_SIZE	8192
 #define TMP_FILE	"/tmp/.dup_files.txt"
 #define HASH_SIZE	64 // sha256 in string format
 #define ARROW_COL	"\e[38;5;13m"
@@ -40,12 +40,8 @@ typedef struct Node Node;
 /* option flags */
 int		IGNORE_HIDDEN;
 int		NO_DELETE;
-int		DAEMON;
 int		QUIET;
 int		DEBUG;
-
-int		daemon_fd;
-char		*DAEMON_OUT = NULL;
 
 struct stat	cur_file_stats;
 Node		*root = NULL;
@@ -119,7 +115,6 @@ main(int argc, char *argv[])
 
 	IGNORE_HIDDEN &= ~IGNORE_HIDDEN;
 	NO_DELETE &= ~NO_DELETE;
-	DAEMON &= ~DAEMON;
 	QUIET &= ~QUIET;
 	DEBUG &= ~DEBUG;
 
@@ -152,7 +147,7 @@ main(int argc, char *argv[])
 		  { log_err("main: setvbuf error"); goto fail; }
 	  }
 
-	if (QUIET || DAEMON)
+	if (QUIET)
 	  {
 		int		fd;
 
@@ -761,11 +756,6 @@ pollux_fini(void)
 	if (line_buf != NULL) { free(line_buf); line_buf = NULL; }
 	if (hash_buf != NULL) { free(hash_buf); hash_buf = NULL; }
 	if (block != NULL) { free(block); block = NULL; }
-
-	if (DAEMON)
-	  {
-		if (DAEMON_OUT != NULL) { free(DAEMON_OUT); DAEMON_OUT = NULL; }
-	  }
 }
 
 int
@@ -826,32 +816,6 @@ get_options(int argc, char *argv[])
 		  {
 			IGNORE_HIDDEN = 1;
 		  }
-		else if (strcmp("--daemon", argv[i]) == 0)
-		  {
-			char		*home_dir = NULL;
-
-			if (!(home_dir = getenv("HOME")))
-			  {
-				log_err("get_options: failed to get home directory (line %d)", __LINE__);
-				goto fail;
-			  }
-
-			if (!(DAEMON_OUT = calloc(MAXLINE, 1)))
-			  {
-				log_err("get_options: failed to allocate memory for DAEMON_OUT (line %d)",
-						__LINE__);
-				goto fail;
-			  }
-
-			sprintf(DAEMON_OUT, "%s/polluxd_scan_results.txt", home_dir);
-
-			DAEMON = 1;
-			if ((daemon_fd = open(DAEMON_OUT, O_RDWR|O_CREAT|O_TRUNC, S_IRWXU & ~S_IXUSR)) < 0)
-			  {
-				log_err("get_options: failed to open/create %s (line %d)", DAEMON_OUT, __LINE__);
-				goto fail;
-			  }
-		  }
 		else if (strcmp("--quiet", argv[i]) == 0
 			|| strcmp("-q", argv[i]) == 0)
 		  {
@@ -888,8 +852,21 @@ print_stats(void)
 {
 	time_t		time_taken;
 	int		ret = 0;
+	int		fd = -1;
+	char		*quiet_out = NULL;
 
 	time_taken = (end - start);
+
+	if (QUIET)
+	  {
+		char	*home_dir = NULL;
+
+		home_dir = getenv("HOME");
+		quiet_out = calloc(MAXLINE, 1);
+		if (quiet_out && home_dir)
+			sprintf(quiet_out, "%s/pollux_scan_results.txt", home_dir);
+		fd = open(quiet_out, O_RDWR|O_CREAT|O_TRUNC, S_IRWXU & ~S_IXUSR);
+	  }
 
 	if (time_taken > 3599)
 	  {
@@ -902,8 +879,9 @@ print_stats(void)
 		minutes = (seconds / 60);
 		seconds -= (minutes * 60);
 
-		if (DAEMON)
+		if (QUIET)
 		  {
+
 			sprintf(line_buf,
 				"%22s: %ld hour%s %ld minute%s %ld second%s\n",
 				"Time elapsed",
@@ -914,7 +892,8 @@ print_stats(void)
 				seconds,
 				(seconds==1?"":"s"));
 
-			ret = write(daemon_fd, line_buf, strlen(line_buf));
+			if (fd > 0)
+				ret = write(fd, line_buf, strlen(line_buf));
 		  }
 		else
 		  {
@@ -936,7 +915,7 @@ print_stats(void)
 		minutes = (time_taken / 60);
 		seconds = (time_taken % 60);
 
-		if (DAEMON)
+		if (QUIET)
 		  {
 			sprintf(line_buf,
 				"%22s: %ld minute%s %ld second%s\n",
@@ -946,19 +925,22 @@ print_stats(void)
 				seconds,
 				(seconds==1?"":"s"));
 
-			ret = write(daemon_fd, line_buf, strlen(line_buf));
+			if (fd > 0)
+				ret = write(fd, line_buf, strlen(line_buf));
 		  }
-
-		fprintf(stdout, "%22s: %ld minute%s %ld second%s\n",
-			"Time elapsed",
-			minutes,
-			(minutes==1?"":"s"),
-			seconds,
-			(seconds==1?"":"s"));
+		else
+		  {
+			fprintf(stdout, "%22s: %ld minute%s %ld second%s\n",
+				"Time elapsed",
+				minutes,
+				(minutes==1?"":"s"),
+				seconds,
+				(seconds==1?"":"s"));
+		  }
 	  }
 	else
 	  {
-		if (DAEMON)
+		if (QUIET)
 		  {
 			sprintf(line_buf,
 				"%22s: %ld second%s\n",
@@ -966,16 +948,19 @@ print_stats(void)
 				time_taken,
 				(time_taken==1?"":"s"));
 
-			ret = write(daemon_fd, line_buf, strlen(line_buf));
+			if (fd > 0)
+				ret = write(fd, line_buf, strlen(line_buf));
 		  }
-
-		fprintf(stdout, "%22s: %ld second%s\n",
-			"Time elapsed",
-			time_taken,
-			(time_taken==1?"":"s"));
+		else
+		  {
+			fprintf(stdout, "%22s: %ld second%s\n",
+				"Time elapsed",
+				time_taken,
+				(time_taken==1?"":"s"));
+		  }
 	  }
 
-	if (DAEMON)
+	if (QUIET)
 	  {
 		sprintf(line_buf,
 			"%22s: %d\n"
@@ -1010,16 +995,18 @@ print_stats(void)
 			(NO_DELETE?"Wasted/Used":"Freed/Used"),
 			((double)wasted_bytes/(double)used_bytes)*100);
 
-			ret = write(daemon_fd, line_buf, strlen(line_buf));
+			if (fd > 0)
+				ret = write(fd, line_buf, strlen(line_buf));
 	  }
-
+	else
+	  {
 	/*
 	 * Want to avoid the compiler complaining about the unused result of write()
 	 * so resetting to zero and using it in an add operation in the following
 	 */
-	ret &= ~ret;
+		ret &= ~ret;
 
-	fprintf(stdout,
+		fprintf(stdout,
 		"%22s: %d\n"
 		"%22s: %d\n"
 		"%22s: %.2lf %s\n"
@@ -1051,6 +1038,12 @@ print_stats(void)
 		 wasted_bytes>999?"KB":"bytes"),
 		(NO_DELETE?"Wasted/Used":"Freed/Used"),
 		((double)wasted_bytes/(double)used_bytes)*100);
+	  }
+
+	if (QUIET)
+	  {
+		if (quiet_out) { free(quiet_out); quiet_out = NULL; }
+	  }
 
 	return;
 }
@@ -1112,7 +1105,6 @@ int
 print_and_decide(char *hash, char *f1, char *f2, FILE *fp)
 {
 	int		choice;
-	int		ret = 0;
 
 	if (!NO_DELETE)
 	  {
@@ -1122,77 +1114,41 @@ print_and_decide(char *hash, char *f1, char *f2, FILE *fp)
 		if (choice == 1) fprintf(fp, "%s\n", f1);
 		else fprintf(fp, "%s\n", f2);
 
-		if (DAEMON)
-		  {
-			sprintf(line_buf,
-				" _ %.*s%s\n"
-				"|_ %.*s%s\n"
-				"|\n"
-				"`---> %s\n\n",
-				max_col, f1, 
-				(choice==1?"[R]":""),
-				max_col, f2,
-				(choice==2?"[R]":""),
-				hash);
-
-			ret = write(daemon_fd, line_buf, strlen(line_buf));
-		  }
-		else
-		  {
-			fprintf(stdout,
-				"%s _\e[m %s%.*s%s\n"
-				"%s|_\e[m %s%.*s%s\n"
-				"%s|\e[m\n"
-				"%s`--->\e[m[\e[38;5;10m%s\e[m]\n\n",
-				ARROW_COL,
-				(choice==1?"\e[9;38;5;88m":""),
-				max_col,
-				f1,
-				(choice==1?"\e[m":""),
-				ARROW_COL,
-				(choice==2?"\e[9;38;5;88m":""),
-				max_col,
-				f2,
-				(choice==2?"\e[m":""),
-				ARROW_COL,
-				ARROW_COL,
-				hash);
-		  }
+		fprintf(stdout,
+			"%s _\e[m %s%.*s%s\n"
+			"%s|_\e[m %s%.*s%s\n"
+			"%s|\e[m\n"
+			"%s`--->\e[m[\e[38;5;10m%s\e[m]\n\n",
+			ARROW_COL,
+			(choice==1?"\e[9;38;5;88m":""),
+			max_col,
+			f1,
+			(choice==1?"\e[m":""),
+			ARROW_COL,
+			(choice==2?"\e[9;38;5;88m":""),
+			max_col,
+			f2,
+			(choice==2?"\e[m":""),
+			ARROW_COL,
+			ARROW_COL,
+			hash);
 	  }
 	else
 	  {
-		if (DAEMON)
-		  {
-			ret &= ~ret;
-
-			sprintf(line_buf,
-				" _ %.*s\n"
-				"|_ %.*s\n"
-				"|\n"
-				"`---> %s\n\n",
-				(max_col+ret), f1, // the compiler complains about unused ret from write()
-				max_col, f2,	   // so using it here with value zero
-				hash);
-
-			ret = write(daemon_fd, line_buf, strlen(line_buf));
-		  }
-		else
-		  {
-			fprintf(stdout,
-				"%s _\e[m %.*s\n"
-				"%s|_\e[m %.*s\n"
-				"%s|\e[m\n"
-				"%s`--->\e[m[\e[38;5;10m%s\e[m]\n\n",
-				ARROW_COL,
-				max_col,
-				f1,
-				ARROW_COL,
-				max_col,
-				f2,
-				ARROW_COL,
-				ARROW_COL,
-				hash);
-		  }
+		fprintf(stdout,
+			"%s _\e[m %.*s\n"
+			"%s|_\e[m %.*s\n"
+			"%s|\e[m\n"
+			"%s`--->\e[m[\e[38;5;10m%s\e[m]\n\n",
+			ARROW_COL,
+			max_col,
+			f1,
+			ARROW_COL,
+			max_col,
+			f2,
+			ARROW_COL,
+			ARROW_COL,
+			hash);
 	  }
 
 	return(0);
