@@ -113,8 +113,9 @@ main(int argc, char *argv[])
 	if (access(argv[1], F_OK) != 0)
 	  { fprintf(stderr, "%s does not exist!\n", argv[1]); goto fail; }
 
-	QUIET &= ~QUIET;
+	IGNORE_HIDDEN &= ~IGNORE_HIDDEN;
 	NO_DELETE &= ~NO_DELETE;
+	QUIET &= ~QUIET;
 	DEBUG &= ~DEBUG;
 
 	if (get_options(argc, argv) < 0)
