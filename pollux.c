@@ -19,28 +19,29 @@
 #include <unistd.h>
 
 #define MAXLINE		1024
+#define BLK_SIZE	4096
 #define TMP_FILE	"/tmp/.dup_files.txt"
 #define HASH_SIZE	64 // sha256 in string format
 #define ARROW_COL	"\e[38;5;13m"
 
-struct NODE
+struct Node
 {
 	int		array;
 	char		*name;
 	size_t		size;
-	struct NODE	*l;
-	struct NODE	*r;
-	struct NODE	*s;
+	struct Node	*l;
+	struct Node	*r;
+	struct Node	*s;
 	char		hash[HASH_SIZE];
 };
 
-typedef struct NODE Node;
+typedef struct Node Node;
 
-/* Option flags */
-int		QUIET;
-int		NO_DELETE;
-int		DEBUG;
+/* option flags */
 int		IGNORE_HIDDEN;
+int		NO_DELETE;
+int		QUIET;
+int		DEBUG;
 
 struct stat	cur_file_stats;
 Node		*root = NULL;
@@ -736,7 +737,7 @@ pollux_init(void)
 	if (!(hash_buf = calloc(32, 1)))
 	  { log_err("pollux_init: calloc error"); goto fail; }
 
-	if (!(block = calloc(1040, 1)))
+	if (!(block = calloc(BLK_SIZE+16, 1)))
 	  { log_err("pollux_init: calloc error"); goto fail; }
 
 	return;
@@ -1059,7 +1060,7 @@ get_sha256_file(char *fname)
 
 	toread = statb.st_size;
 
-	while (toread > 0 && (nbytes = read(fd, block, 1024)) > 0)
+	while (toread > 0 && (nbytes = read(fd, block, BLK_SIZE)) > 0)
 	  {
 		block[nbytes] = 0;
 		if (1 != EVP_DigestUpdate(ctx, block, nbytes)) goto fail;
