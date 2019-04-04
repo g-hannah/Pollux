@@ -81,6 +81,7 @@ char *illegal_terms[] =
 
 char		*line_buf = NULL;
 unsigned char	*hash_buf = NULL;
+char		*hash_hex = NULL;
 char		*block = NULL;
 
 struct winsize	winsz;
@@ -406,7 +407,6 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 	unsigned char	*cur_file_hash = NULL;
 	unsigned char	*comp_file_hash = NULL;
 	char		*h = NULL;
-	char		*hash_hex = NULL;
 	Node		*nptr = NULL;
 	size_t		l, rl;
 
@@ -443,7 +443,7 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 
 	else // possible duplicate file
 	  {
-		if (!(hash_hex = calloc(HASH_SIZE+1, 1))) { log_err("insert_file: calloc error"); goto fail; }
+		//if (!(hash_hex = calloc(HASH_SIZE+1, 1))) { log_err("insert_file: calloc error"); goto fail; }
 
 		if (!(cur_file_hash = get_sha256_file(fname)))
 		  {
@@ -586,12 +586,12 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 	  }
 
 	fini:
-	if (hash_hex != NULL) { free(hash_hex); hash_hex = NULL; }
+	//if (hash_hex != NULL) { free(hash_hex); hash_hex = NULL; }
 
 	return (0);
 
 	fail:
-	if (hash_hex != NULL) { free(hash_hex); hash_hex = NULL; }
+	//if (hash_hex != NULL) { free(hash_hex); hash_hex = NULL; }
 
 	return(-1);
 }
@@ -706,16 +706,19 @@ pollux_init(void)
 	signal(SIGQUIT, signal_handler);
 
 	if (!(path = calloc((MAXLINE*2), 1)))
-	  { log_err("pollux_init: calloc error"); goto fail; }
+	  { log_err("pollux_init: calloc error (line %d)", __LINE__); goto fail; }
 
 	if (!(line_buf = calloc(MAXLINE, 1)))
-	  { log_err("pollux_init: calloc error"); goto fail; }
+	  { log_err("pollux_init: calloc error (line %d)", __LINE__); goto fail; }
 
 	if (!(hash_buf = calloc(32, 1)))
-	  { log_err("pollux_init: calloc error"); goto fail; }
+	  { log_err("pollux_init: calloc error (line %d)", __LINE__); goto fail; }
+
+	if (!(hash_hex = calloc((HASH_SIZE+16), 1)))
+	  { log_err("pollux_init: calloc error (line %d)", __LINE__); goto fail; }
 
 	if (!(block = calloc(BLK_SIZE+16, 1)))
-	  { log_err("pollux_init: calloc error"); goto fail; }
+	  { log_err("pollux_init: calloc error (line %d)", __LINE__); goto fail; }
 
 	return;
 
@@ -731,6 +734,7 @@ pollux_fini(void)
 	if (path != NULL) { free(path); path = NULL; }
 	if (line_buf != NULL) { free(line_buf); line_buf = NULL; }
 	if (hash_buf != NULL) { free(hash_buf); hash_buf = NULL; }
+	if (hash_hex != NULL) { free(hash_hex); hash_hex = NULL; }
 	if (block != NULL) { free(block); block = NULL; }
 }
 
