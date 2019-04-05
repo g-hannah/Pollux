@@ -37,20 +37,20 @@ struct Node
 typedef struct Node Node;
 
 /* option flags */
-int		IGNORE_HIDDEN;
-int		NO_DELETE;
-int		QUIET;
-int		DEBUG;
+int		IGNORE_HIDDEN = 0;
+int		NO_DELETE = 0;
+int		QUIET = 0;
+int		DEBUG = 0;
 
 struct stat	cur_file_stats;
 Node		*root = NULL;
-int		files_scanned;
-int		dup_files;
-int		tmp_fd;
-FILE		*tmp_fp;
-uint64_t	used_bytes;
-uint64_t	wasted_bytes;
-time_t		start, end;
+int		files_scanned = 0;
+int		dup_files = 0;
+int		tmp_fd = -1;
+FILE		*tmp_fp = NULL;
+uint64_t	used_bytes = 0;
+uint64_t	wasted_bytes = 0;
+time_t		start = 0, end = 0;
 char		*path = NULL;
 struct rlimit	rlims;
 char		**user_blacklist = NULL;
@@ -85,7 +85,7 @@ char		*hash_hex = NULL;
 char		*block = NULL;
 
 struct winsize	winsz;
-int		max_col;
+int		max_col = 0;
 
 int insert_file(Node **, char *, size_t, FILE *) __nonnull ((1,2,4)) __wur;
 void free_tree(Node **) __nonnull ((1));
@@ -107,7 +107,7 @@ void print_stats(void);
 int
 main(int argc, char *argv[])
 {
-	int 	r;
+	int 	r = 0;
 
 	if (access(argv[1], F_OK) != 0)
 	  { fprintf(stderr, "%s does not exist!\n", argv[1]); goto fail; }
@@ -148,7 +148,7 @@ main(int argc, char *argv[])
 
 	if (QUIET)
 	  {
-		int		fd;
+		int		fd = -1;
 
 		if ((fd = open("/dev/null", O_RDWR)) < 0)
 		  { log_err("main: open error"); goto fail; }
@@ -203,16 +203,16 @@ main(int argc, char *argv[])
 int
 scan_dirs(char *path)
 {
-	size_t		n, n_sv;
+	size_t		n = 0, n_sv = 0;
 	DIR		*dp = NULL;
 	struct dirent	*dinf = NULL;
 #ifndef __APPLE__
-	long		dir_position;
+	long		dir_position = 0;
 #endif
-	int		i;
-	int		dfd;
-	int		illegal;
-	register int	loop_cnt;
+	int		i = 0;
+	int		dfd = -1;
+	int		illegal = 0;
+	register int	loop_cnt = 0;
 
 	n = strlen(path);
 
@@ -291,17 +291,9 @@ scan_dirs(char *path)
 			log_err("scan_dirs: lstat error for %s (line %d)", path, __LINE__); goto fail;
 		  }
 
-#ifdef __S_IFLNK
 		if (S_ISLNK(cur_file_stats.st_mode)) continue;
-#endif
-
-#ifdef __S_IFSOCK
 		if (S_ISSOCK(cur_file_stats.st_mode)) continue;
-#endif
-
-#ifdef __S_IFCHR
 		if (S_ISCHR(cur_file_stats.st_mode)) continue;
-#endif
 
 		if (S_ISREG(cur_file_stats.st_mode))
 		  {
@@ -313,10 +305,20 @@ scan_dirs(char *path)
 			if (insert_file(&root, path, cur_file_stats.st_size, tmp_fp) < 0)
 				return(-1);
 		  }
+
 		else if (S_ISDIR(cur_file_stats.st_mode))
 		  {
 #ifdef __APPLE__
-			static char		cur_file_name[MAXLINE];
+			char		*cur_file_name = NULL;
+			size_t		sz;
+
+			sz = ((strlen(dinf->d_name) + 0x10) & ~(0xf));
+			if (!(cur_file_name = calloc(sz, 1)))
+			  {
+				log_err("insert_file: failed to allocate memory for current file %s (line %d)",
+					dinf->d_name, __LINE__);
+				goto fail;
+			  }
 
 			strncpy(cur_file_name, dinf->d_name, strlen(dinf->d_name));
 			cur_file_name[strlen(dinf->d_name)] = 0;
@@ -350,8 +352,13 @@ scan_dirs(char *path)
 				dinf = readdir(dp);
 
 			if (! dinf) goto fini;
+
+			if (cur_file_name != NULL) { free(cur_file_name); cur_file_name = NULL; }
+
 #else
+
 			dir_position = telldir(dp);
+
 			closedir(dp);
 			dp = NULL;
 
@@ -403,12 +410,12 @@ scan_dirs(char *path)
 int
 insert_file(Node **root, char *fname, size_t size, FILE *fp)
 {
-	int		i;
+	int		i = 0;
 	unsigned char	*cur_file_hash = NULL;
 	unsigned char	*comp_file_hash = NULL;
 	char		*h = NULL;
 	Node		*nptr = NULL;
-	size_t		l, rl;
+	size_t		l = 0, rl = 0;
 
 	l = strlen(fname);
 	rl = ((l + 0xf) & ~(0xf));
@@ -599,7 +606,7 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 void
 free_tree(Node **root)
 {
-	int		i;
+	int		i = 0;
 
 	if (*root == NULL) return;
 
@@ -669,7 +676,7 @@ debug(char *fmt, ...)
 void
 signal_handler(int signo)
 {
-	int	i;
+	int	i = 0;
 
 	setvbuf(stdout, NULL, _IONBF, 0);
 	for (i = 0; i < 2; ++i)
@@ -741,8 +748,8 @@ pollux_fini(void)
 int
 get_options(int argc, char *argv[])
 {
-	int		i, j;
-	int		blist_idx;
+	int		i = 0, j = 0;
+	int		blist_idx = 0;
 
 	for (i = 1; i < argc; ++i)
 	  {
@@ -830,7 +837,7 @@ get_options(int argc, char *argv[])
 void
 print_stats(void)
 {
-	time_t		time_taken;
+	time_t		time_taken = 0;
 	int		ret = 0;
 	int		fd = -1;
 	char		*quiet_out = NULL;
@@ -1032,8 +1039,8 @@ int
 remove_which(char *c1, char *c2)
 {
 	char		*p = NULL, *q = NULL;
-	size_t		l1, l2;
-	int		choice;
+	size_t		l1 = 0, l2 = 0;
+	int		choice = 0;
 
 	if (strstr(c1, "System Volume")) return(1);
 	else if (strstr(c2, "System Volume")) return(2);
@@ -1084,7 +1091,7 @@ remove_which(char *c1, char *c2)
 int
 print_and_decide(char *hash, char *f1, char *f2, FILE *fp)
 {
-	int		choice;
+	int		choice = 0;
 
 	if (!NO_DELETE)
 	  {
@@ -1139,11 +1146,11 @@ get_sha256_file(char *fname)
 {
 	EVP_MD_CTX		*ctx = NULL;
 	int			fd = -1;
-	int			_errno;
-	unsigned int		hashlen;
+	int			_errno = 0;
+	unsigned int		hashlen = 0;
 	struct stat		statb;
-	size_t			toread;
-	ssize_t			nbytes;
+	size_t			toread = 0;
+	ssize_t			nbytes = 0;
 
 	memset(&statb, 0, sizeof(statb));
 	if (lstat(fname, &statb) < 0) goto fail;
@@ -1181,7 +1188,7 @@ void
 strip_crnl(char *line)
 {
 	char	*p = NULL;
-	size_t	l;
+	size_t	l = 0;
 
 	l = strlen(line);
 
@@ -1201,8 +1208,8 @@ strip_crnl(char *line)
 char *
 hexlify(unsigned char *data, size_t len)
 {
-	char	c;
-	int	i, k;
+	char	c = 0;
+	int	i = 0, k = 0;
 
 	k &= ~k;
 
