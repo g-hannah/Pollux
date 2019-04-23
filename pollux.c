@@ -109,6 +109,8 @@ main(int argc, char *argv[])
 {
 	int 	r = 0;
 
+	IGNORE_HIDDEN = NO_DELETE = QUIET = DEBUG = 0;
+
 	if (argc < 2)
 	  {
 			fprintf(stderr,
@@ -128,12 +130,6 @@ main(int argc, char *argv[])
 	else
 	if (access(argv[1], F_OK) != 0)
 	  { fprintf(stderr, "%s does not exist!\n", argv[1]); goto fail; }
-
-	IGNORE_HIDDEN &= ~IGNORE_HIDDEN;
-	NO_DELETE &= ~NO_DELETE;
-	QUIET &= ~QUIET;
-	DEBUG &= ~DEBUG;
-
 
 	/*
 	 * Might be using Cron to run us, so test first before doing ioctl() for
