@@ -109,6 +109,23 @@ main(int argc, char *argv[])
 {
 	int 	r = 0;
 
+	if (argc < 2)
+	  {
+			fprintf(stderr,
+					"\n%s </path/to/directory> [options}\n\n"
+					"-N,--nodelete		Don't delete the duplicate files\n"
+					"--nohidden				Ignore hidden files (begin with '.')\n"
+					"-q,--quiet				Only output final stats\n"
+					"-D,--debug				Run in debug mode\n"
+					"-h,--help				Display this information menu\n",
+					argv[0]);
+
+			exit(EXIT_FAILURE);
+	  }
+	else
+	if (get_options(argc, argv) < 0)
+		goto fail;
+	else
 	if (access(argv[1], F_OK) != 0)
 	  { fprintf(stderr, "%s does not exist!\n", argv[1]); goto fail; }
 
@@ -117,8 +134,6 @@ main(int argc, char *argv[])
 	QUIET &= ~QUIET;
 	DEBUG &= ~DEBUG;
 
-	if (get_options(argc, argv) < 0)
-		goto fail;
 
 	/*
 	 * Might be using Cron to run us, so test first before doing ioctl() for
@@ -760,6 +775,21 @@ get_options(int argc, char *argv[])
 
 		if (i >= argc) break;
 
+		if (strcmp("--help", argv[i]) == 0
+			|| strcmp("-h", argv[i]) == 0)
+		  {
+				fprintf(stderr,
+					"\n%s </path/to/directory> [options}\n\n"
+					"-N,--nodelete		Don't delete the duplicate files\n"
+					"--nohidden				Ignore hidden files (begin with '.')\n"
+					"-q,--quiet				Only output final stats\n"
+					"-D,--debug				Run in debug mode\n"
+					"-h,--help				Display this information menu\n",
+					argv[0]);
+
+				exit(EXIT_SUCCESS);
+		  }
+		else
 		if (strcmp("--blacklist", argv[i]) == 0
 			|| strcmp("-B", argv[i]) == 0)
 		  {
@@ -808,7 +838,8 @@ get_options(int argc, char *argv[])
 		  {
 			QUIET = 1;
 		  }
-		else if (strcmp("--debug", argv[i]) == 0
+		else
+		if (strcmp("--debug", argv[i]) == 0
 			|| strcmp("-D", argv[i]) == 0)
 		  {
 			DEBUG = 1;
