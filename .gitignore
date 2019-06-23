@@ -2,10 +2,6 @@
 !.gitignore
 pollux
 *.o
-TESTING
-GUI
-pollux_win.c
-pollux_os_x.c
 pollux0*
 maketest
 *.s

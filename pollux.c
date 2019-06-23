@@ -140,10 +140,10 @@ main(int argc, char *argv[])
 
 	if (isatty(STDOUT_FILENO))
 	  {
-		if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &winsz) < 0)
-		  { log_err("main: ioctl TIOCGWINSZ error"); goto fail; }
+			if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &winsz) < 0)
+		  	{ log_err("main: ioctl TIOCGWINSZ error"); goto fail; }
 
-		max_col = winsz.ws_col - 6;
+			max_col = winsz.ws_col - 6;
 	  }
 	 
 
