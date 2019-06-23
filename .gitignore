@@ -4,4 +4,5 @@ pollux
 *.o
 pollux0*
 maketest
+speed_test
 *.s
