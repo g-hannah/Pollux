@@ -22,6 +22,7 @@
 #define TMP_FILE	"/tmp/.dup_files.txt"
 #define HASH_SIZE	64 // sha256 in string format
 #define ARROW_COL	"\e[38;5;13m"
+#define BUILD			"2.0.0"
 
 struct Node
 {
@@ -176,7 +177,8 @@ main(int argc, char *argv[])
 	strncpy(path, argv[1], strlen(argv[1]));
 	path[strlen(argv[1])] = 0;
 
-	printf(">>> Pollux v1.0 %s<<<\n",
+	printf(">>> Pollux v%s %s<<<\n",
+		BUILD,
 		(DEBUG?"(Debug Mode)":""));
 
 	printf("Starting scan in %s\n\n", argv[1]);
@@ -776,6 +778,7 @@ get_options(int argc, char *argv[])
 		  {
 				fprintf(stderr,
 					"\n%s </path/to/directory> [options}\n\n"
+					"-B,--blacklist		Blacklist keywords from scan\n"
 					"-N,--nodelete		Don't delete the duplicate files\n"
 					"--nohidden				Ignore hidden files (begin with '.')\n"
 					"-q,--quiet				Only output final stats\n"
