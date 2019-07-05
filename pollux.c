@@ -1287,7 +1287,7 @@ void
 display_usage(const int exit_status)
 {
 	fprintf(stderr,
-		"\n%s </path/to/directory> [options}\n\n"
+		"\n%s </path/to/directory> [options]\n\n"
 		"-B,--blacklist		Blacklist keywords from scan\n"
 		"-N,--nodelete		Don't delete the duplicate files\n"
 		"--nohidden		Ignore hidden files (begin with '.')\n"
