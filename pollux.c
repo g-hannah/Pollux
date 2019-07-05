@@ -22,7 +22,9 @@
 #define TMP_FILE	"/tmp/.dup_files.txt"
 #define HASH_SIZE	64 // sha256 in string format
 #define ARROW_COL	"\e[38;5;13m"
-#define BUILD			"2.0.0"
+#define BANNER_COL	"\e[38;5;202m"
+#define HIGHLIGHT_COL	"\e[38;5;246m"
+#define BUILD			"2.0.1"
 
 struct Node
 {
@@ -53,6 +55,7 @@ uint64_t	used_bytes = 0;
 uint64_t	wasted_bytes = 0;
 time_t		start = 0, end = 0;
 char		*path = NULL;
+static char program_name[64];
 struct rlimit	rlims;
 char		**user_blacklist = NULL;
 char *illegal_terms[] = 
@@ -96,6 +99,8 @@ int remove_which(char *, char *) __nonnull ((1,2)) __wur;
 unsigned char *get_sha256_file(char *) __nonnull ((1)) __wur;
 void strip_crnl(char *) __nonnull ((1));
 inline char *hexlify(unsigned char *, size_t) __nonnull ((1)) __wur;
+static void display_usage(const int) __attribute__ ((__noreturn__));
+static int check_file(const char *) __nonnull ((1)) __wur;
 
 void log_err(char *, ...) __nonnull ((1));
 void debug(char *, ...) __nonnull ((1));
@@ -112,25 +117,17 @@ main(int argc, char *argv[])
 
 	IGNORE_HIDDEN = NO_DELETE = QUIET = DEBUG = 0;
 
-	if (argc < 2)
-	  {
-			fprintf(stderr,
-					"\n%s </path/to/directory> [options}\n\n"
-					"-N,--nodelete		Don't delete the duplicate files\n"
-					"--nohidden				Ignore hidden files (begin with '.')\n"
-					"-q,--quiet				Only output final stats\n"
-					"-D,--debug				Run in debug mode\n"
-					"-h,--help				Display this information menu\n",
-					argv[0]);
+	strncpy(program_name, argv[0], strlen(argv[0]));
+	program_name[strlen(argv[0])] = 0;
 
-			exit(EXIT_FAILURE);
-	  }
+	if (argc < 2)
+			display_usage(EXIT_FAILURE);
 	else
 	if (get_options(argc, argv) < 0)
 		goto fail;
-	else
-	if (access(argv[1], F_OK) != 0)
-	  { fprintf(stderr, "%s does not exist!\n", argv[1]); goto fail; }
+
+	if (check_file(argv[1]))
+		goto fail;
 
 	/*
 	 * Might be using Cron to run us, so test first before doing ioctl() for
@@ -150,7 +147,7 @@ main(int argc, char *argv[])
 
 	if (!NO_DELETE)
 	  {
-		if ((tmp_fd = open(TMP_FILE, O_RDWR|O_CREAT|O_TRUNC, S_IRWXU & ~S_IXUSR)) < 0)
+		if ((tmp_fd = open(TMP_FILE, O_RDWR|O_CREAT|O_TRUNC, S_IRUSR|S_IWUSR)) < 0)
 		  { log_err("main: open error"); goto fail; }
 		if (!(tmp_fp = fdopen(tmp_fd, "r+")))
 		  { log_err("main: fdopen error"); goto fail; }
@@ -171,17 +168,18 @@ main(int argc, char *argv[])
 			dup2(fd, STDERR_FILENO);
 
 		close(fd);
+		fd = -1;
 	  }
-
 
 	strncpy(path, argv[1], strlen(argv[1]));
 	path[strlen(argv[1])] = 0;
 
-	printf(">>> Pollux v%s %s<<<\n",
+	printf(">>> %sPollux\e[m v%s %s<<<\n",
+		BANNER_COL,
 		BUILD,
 		(DEBUG?"(Debug Mode)":""));
 
-	printf("Starting scan in %s\n\n", argv[1]);
+	printf("Starting scan in %s%s\e[m\n\n", HIGHLIGHT_COL, argv[1]);
 
 	time(&start);
 	r = scan_dirs(path);
@@ -192,16 +190,15 @@ main(int argc, char *argv[])
 	//sync();
 
 	if (!NO_DELETE)
-	  {
+	{
 		lseek(tmp_fd, 0, SEEK_SET);
 		while (fgets(line_buf, MAXLINE, tmp_fp) != NULL)
-	  	  {
+	  {
 			strip_crnl(line_buf);
 			unlink(line_buf);
-	  	  }
-
+		}
 		unlink(TMP_FILE);
-	  }
+	}
 
 	debug("printing stats");
 	print_stats();
@@ -258,8 +255,7 @@ scan_dirs(char *path)
 
 	debug("opened %s", path);
 
-	illegal &= ~illegal;
-	loop_cnt &= ~loop_cnt;
+	illegal = loop_cnt = 0;
 
 	while ((dinf = readdir(dp)) != NULL)
 	  {
@@ -283,7 +279,7 @@ scan_dirs(char *path)
 			  { debug("illegal term (%s) in path (%s)", illegal_terms[i], path); illegal = 1; }
 		  }
 
-		if (illegal) { illegal &= ~illegal; continue; }		
+		if (illegal) { illegal = 0; continue; }		
 
 		if (user_blacklist != NULL)
 		  {
@@ -293,7 +289,7 @@ scan_dirs(char *path)
 				  { debug("blacklisted term (%s) in path (%s)", user_blacklist[i], path); illegal = 1; }
 		  	  }
 
-			if (illegal) { illegal &= ~illegal; continue; }
+			if (illegal) { illegal = 0; continue; }
 		  }
 
 		memset(&cur_file_stats, 0, sizeof(cur_file_stats));
@@ -322,6 +318,12 @@ scan_dirs(char *path)
 		else if (S_ISDIR(cur_file_stats.st_mode))
 		  {
 #ifdef __APPLE__
+			/*
+			 * on OS X, cannot save directory position with telldir()
+			 * and then reopen the directory and seek to that position
+			 * because the return from telldir() is rendered invalid
+			 * on closing/reopening the directory.
+			 */
 			char		*cur_file_name = NULL;
 			size_t		sz;
 
@@ -361,6 +363,11 @@ scan_dirs(char *path)
 
 			if (! dinf) goto fini;
 
+			/*
+			 * Just read until we reach the file we were previously
+			 * at before closing and reopening the directory
+			 * (successfully tested on OS X High Sierra)
+			 */
 			while (strcmp(dinf->d_name, cur_file_name) != 0 && dinf)
 				dinf = readdir(dp);
 
@@ -369,7 +376,6 @@ scan_dirs(char *path)
 			if (cur_file_name != NULL) { free(cur_file_name); cur_file_name = NULL; }
 
 #else
-
 			dir_position = telldir(dp);
 
 			closedir(dp);
@@ -710,10 +716,10 @@ signal_handler(int signo)
 void
 pollux_init(void)
 {
-	used_bytes &= ~used_bytes;
-	wasted_bytes &= ~wasted_bytes;
-	files_scanned &= ~files_scanned;
-	dup_files &= ~dup_files;
+	used_bytes = 0;
+	wasted_bytes = 0;
+	files_scanned = 0;
+	dup_files = 0;
 
 	OPENSSL_config(NULL);
 	OpenSSL_add_all_digests();
@@ -776,15 +782,7 @@ get_options(int argc, char *argv[])
 		if (strcmp("--help", argv[i]) == 0
 			|| strcmp("-h", argv[i]) == 0)
 		  {
-				fprintf(stderr,
-					"\n%s </path/to/directory> [options}\n\n"
-					"-B,--blacklist		Blacklist keywords from scan\n"
-					"-N,--nodelete		Don't delete the duplicate files\n"
-					"--nohidden				Ignore hidden files (begin with '.')\n"
-					"-q,--quiet				Only output final stats\n"
-					"-D,--debug				Run in debug mode\n"
-					"-h,--help				Display this information menu\n",
-					argv[0]);
+				display_usage(EXIT_SUCCESS);
 
 				exit(EXIT_SUCCESS);
 		  }
@@ -799,7 +797,7 @@ get_options(int argc, char *argv[])
 
 			++i;
 			j = i;
-			blist_idx &= ~blist_idx;
+			blist_idx = 0;
 
 			while (j < argc
 				&& strncmp("-", argv[j], 1) != 0
@@ -1021,7 +1019,7 @@ print_stats(void)
 	 * Want to avoid the compiler complaining about the unused result of write()
 	 * so resetting to zero and using it in an add operation in the following
 	 */
-		ret &= ~ret;
+		ret = 0;
 
 		fprintf(stdout,
 		"%22s: %d\n"
@@ -1057,10 +1055,12 @@ print_stats(void)
 		((double)wasted_bytes/(double)used_bytes)*100);
 	  }
 
+	fputc(0x0a, stdout);
+
 	if (QUIET)
-	  {
+	{
 		if (quiet_out) { free(quiet_out); quiet_out = NULL; }
-	  }
+	}
 
 	return;
 }
@@ -1241,7 +1241,7 @@ hexlify(unsigned char *data, size_t len)
 	char	c = 0;
 	int	i = 0, k = 0;
 
-	k &= ~k;
+	k = 0;
 
 	for (i = 0; i < len; ++i)
 	  {
@@ -1263,4 +1263,38 @@ hexlify(unsigned char *data, size_t len)
 	line_buf[k] = 0;
 
 	return(line_buf);
+}
+
+int
+check_file(const char *file)
+{
+	if (access(file, F_OK) != 0)
+	{
+		fprintf(stderr, "check_file: %s does not exist\n", file);
+		return 1;
+	}
+	else
+	if (access(file, R_OK) != 0) // must be readable to get hash digest
+	{
+		fprintf(stderr, "check_file: not read permission for %s\n", file);
+		return 1;
+	}
+	else
+		return 0;
+}
+
+void
+display_usage(const int exit_status)
+{
+	fprintf(stderr,
+		"\n%s </path/to/directory> [options}\n\n"
+		"-B,--blacklist		Blacklist keywords from scan\n"
+		"-N,--nodelete		Don't delete the duplicate files\n"
+		"--nohidden		Ignore hidden files (begin with '.')\n"
+		"-q,--quiet		Only output final stats\n"
+		"-D,--debug		Run in debug mode\n"
+		"-h,--help		Display this information menu\n",
+		program_name);
+
+	exit(exit_status);
 }
