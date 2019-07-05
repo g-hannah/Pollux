@@ -174,10 +174,21 @@ main(int argc, char *argv[])
 	strncpy(path, argv[1], strlen(argv[1]));
 	path[strlen(argv[1])] = 0;
 
-	printf(">>> %sPollux\e[m v%s %s<<<\n",
-		BANNER_COL,
-		BUILD,
-		(DEBUG?"(Debug Mode)":""));
+	fprintf(stdout,
+			"\n%s"
+			"   OOOOOOOOO    OOOOOOOOO    OOOO        OOOO        OOOO     OOOO  OOOOOO     OOOOOO\n"
+			"  OOOOOOOOOOO  OOOOOOOOOOO  OOOOOO      OOOOOO      OOOOOO   OOOOOO  OOOOOO   OOOOOO \n"
+			" OOOOO  OOOOO OOOOOOOOOOOOO OOOOOO      OOOOOO      OOOOOO   OOOOOO   OOOOOO OOOOOO  \n"
+			" OOOOO  OOOOO OOOOO   OOOOO OOOOOO      OOOOOO      OOOOOO   OOOOOO    OOOOOOOOOOO   \n"
+			" OOOOOOOOOOOO OOOOO   OOOOO OOOOOO      OOOOOO      OOOOOO   OOOOOO     OOOOOOOOO    \n"
+			" OOOOOOOOOOO  OOOOO   OOOOO OOOOOO      OOOOOO      OOOOOO   OOOOOO    OOOOOOOOOOO   \n"
+			" OOOOO        OOOOOOOOOOOOO OOOOOOOOOO  OOOOOOOOOO  OOOOOOOOOOOOOOO   OOOOOO OOOOOO  \n"
+			" OOOOO         OOOOOOOOOOO  OOOOOOOOOOO OOOOOOOOOOO  OOOOOOOOOOOOO   OOOOOO   OOOOOO \n"
+			" OOOOO          OOOOOOOOO    OOOOOOOOO   OOOOOOOOO    OOOOOOOOOOO   OOOOOO     OOOOOO\e[m\n"
+			"\n"
+			" v%s\n\n",
+			BANNER_COL,
+			BUILD);
 
 	printf("Starting scan in %s%s\e[m\n\n", HIGHLIGHT_COL, argv[1]);
 
