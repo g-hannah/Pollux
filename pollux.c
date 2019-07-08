@@ -91,24 +91,25 @@ char		*block = NULL;
 struct winsize	winsz;
 int		max_col = 0;
 
-int insert_file(Node **, char *, size_t, FILE *) __nonnull ((1,2,4)) __wur;
-void free_tree(Node **) __nonnull ((1));
-int scan_dirs(char *) __nonnull ((1)) __wur;
-int print_and_decide(char *, char *, char *, FILE *) __nonnull ((1,2,3,4)) __wur;
-int remove_which(char *, char *) __nonnull ((1,2)) __wur;
-unsigned char *get_sha256_file(char *) __nonnull ((1)) __wur;
-void strip_crnl(char *) __nonnull ((1));
-inline char *hexlify(unsigned char *, size_t) __nonnull ((1)) __wur;
+static int insert_file(Node **, char *, size_t, FILE *) __nonnull ((1,2,4)) __wur;
+static void free_tree(Node **) __nonnull ((1));
+static int scan_dirs(char *) __nonnull ((1)) __wur;
+static int print_and_decide(char *, char *, char *, FILE *) __nonnull ((1,2,3,4)) __wur;
+static int remove_which(char *, char *) __nonnull ((1,2)) __wur;
+static unsigned char *get_sha256_file(char *) __nonnull ((1)) __wur;
+static void close_excess_fds(int, int);
+static void strip_crnl(char *) __nonnull ((1));
+static inline char *hexlify(unsigned char *, size_t) __nonnull ((1)) __wur;
 static void display_usage(const int) __attribute__ ((__noreturn__));
 static int check_file(const char *) __nonnull ((1)) __wur;
 
-void log_err(char *, ...) __nonnull ((1));
-void debug(char *, ...) __nonnull ((1));
-void signal_handler(int) __attribute__ ((__noreturn__));
-void pollux_init(void) __attribute__ ((constructor));
-void pollux_fini(void) __attribute__ ((destructor));
-int get_options(int, char *[]) __nonnull ((2)) __wur;
-void print_stats(void);
+static void log_err(char *, ...) __nonnull ((1));
+static void debug(char *, ...) __nonnull ((1));
+static void signal_handler(int) __attribute__ ((__noreturn__));
+static void pollux_init(void) __attribute__ ((constructor));
+static void pollux_fini(void) __attribute__ ((destructor));
+static int get_options(int, char *[]) __nonnull ((2)) __wur;
+static void print_stats(void);
 
 int
 main(int argc, char *argv[])
@@ -269,7 +270,7 @@ scan_dirs(char *path)
 	illegal = loop_cnt = 0;
 
 	while ((dinf = readdir(dp)) != NULL)
-	  {
+	{
 		++loop_cnt;
 		debug("in main loop: path %s", path);
 
@@ -285,38 +286,38 @@ scan_dirs(char *path)
 		*(path + n + strlen(dinf->d_name)) = 0;
 
 		for (i = 0; illegal_terms[i] != NULL; ++i)
-		  {
+		{
 			if (strstr(path, illegal_terms[i]))
 			  { debug("illegal term (%s) in path (%s)", illegal_terms[i], path); illegal = 1; }
-		  }
+		}
 
 		if (illegal) { illegal = 0; continue; }		
 
 		if (user_blacklist != NULL)
-		  {
+		{
 			for (i = 0; user_blacklist[i] != NULL; ++i)
-		  	  {
+		  {
 				if (strstr(path, user_blacklist[i]))
 				  { debug("blacklisted term (%s) in path (%s)", user_blacklist[i], path); illegal = 1; }
-		  	  }
+		  }
 
 			if (illegal) { illegal = 0; continue; }
-		  }
+		}
 
 		memset(&cur_file_stats, 0, sizeof(cur_file_stats));
 		if (lstat(path, &cur_file_stats) < 0)
-		  {
+		{
 			if (errno == EACCES) continue;
 
 			log_err("scan_dirs: lstat error for %s (line %d)", path, __LINE__); goto fail;
-		  }
+		}
 
 		if (S_ISLNK(cur_file_stats.st_mode)) continue;
 		if (S_ISSOCK(cur_file_stats.st_mode)) continue;
 		if (S_ISCHR(cur_file_stats.st_mode)) continue;
 
 		if (S_ISREG(cur_file_stats.st_mode))
-		  {
+		{
 			++files_scanned;
 			used_bytes += cur_file_stats.st_size;
 
@@ -324,10 +325,10 @@ scan_dirs(char *path)
 
 			if (insert_file(&root, path, cur_file_stats.st_size, tmp_fp) < 0)
 				return(-1);
-		  }
+		}
 
 		else if (S_ISDIR(cur_file_stats.st_mode))
-		  {
+		{
 #ifdef __APPLE__
 			/*
 			 * on OS X, cannot save directory position with telldir()
@@ -340,24 +341,17 @@ scan_dirs(char *path)
 
 			sz = ((strlen(dinf->d_name) + 0x10) & ~(0xf));
 			if (!(cur_file_name = calloc(sz, 1)))
-			  {
+			{
 				log_err("insert_file: failed to allocate memory for current file %s (line %d)",
 					dinf->d_name, __LINE__);
 				goto fail;
-			  }
+			}
 
 			strncpy(cur_file_name, dinf->d_name, strlen(dinf->d_name));
 			cur_file_name[strlen(dinf->d_name)] = 0;
 
 			closedir(dp);
-
-			if ((loop_cnt % 50) == 0)
-			  {
-				if (NO_DELETE)
-					for (i = 3; i < rlims.rlim_cur; ++i) close(i);
-				else
-					for (i = (tmp_fd+1); i < rlims.rlim_cur; ++i) close(i);
-			  }
+			close_excess_fds(NO_DELETE ? 3 : (tmp_fd + 1), rlims.rlim_cur);
 
 			if (scan_dirs(path) < 0) goto fail;
 
@@ -392,13 +386,7 @@ scan_dirs(char *path)
 			closedir(dp);
 			dp = NULL;
 
-			if ((loop_cnt % 50) == 0)
-			  {
-				if (NO_DELETE)
-					for (i = 3; i < rlims.rlim_cur; ++i) close(i);
-				else
-					for (i = (tmp_fd+1); i < rlims.rlim_cur; ++i) close(i);
-			  }
+			close_excess_fds(NO_DELETE ? 3 : (tmp_fd + 1), rlims.rlim_cur);
 
 			debug("descending into %s", path);
 
@@ -412,17 +400,17 @@ scan_dirs(char *path)
 			 * already previously opened PATH with no problems
 			 */
 			if (!(dp = fdopendir(open(path, O_RDONLY))))
-			  { log_err("scan_dirs: opendir error (line %d)", __LINE__); goto fail; }
+			{ log_err("scan_dirs: opendir error (line %d)", __LINE__); goto fail; }
 
 			seekdir(dp, dir_position);
 #endif
-		  }
+		}
 		else
-		  {
+		{
 			continue;
-		  }
+		}
 
-	  }
+	} // while ((dir_inf = readdir()) != NULL)
 
 	debug("finished main loop");
 
@@ -1223,6 +1211,17 @@ get_sha256_file(char *fname)
 	if (ctx != NULL) { EVP_MD_CTX_destroy(ctx); ctx = NULL; }
 	errno = _errno;
 	return(NULL);
+}
+
+void
+close_excess_fds(int start, int limit)
+{
+	int		i;
+
+	for (i = start; i < limit; ++i)
+		close(i);
+
+	return;
 }
 
 void
