@@ -26,6 +26,8 @@
 #define HIGHLIGHT_COL	"\e[38;5;246m"
 #define BUILD			"2.0.3"
 
+static char *hexdigits = "0123456789abcdef";
+
 struct Node
 {
 	int		array;
@@ -1252,31 +1254,20 @@ strip_crnl(char *line)
 char *
 hexlify(unsigned char *data, size_t len)
 {
-	char	c = 0;
-	int	i = 0, k = 0;
+	int	i, k, c;
 
 	k = 0;
-
 	for (i = 0; i < len; ++i)
-	  {
-		c = ((data[i] >> 0x4) & 0x0f);
-		if (c < 0x0a)
-			c += 0x30;
-		else
-			c += 0x57;
-		line_buf[k++] = c;
-
-		c = (data[i] & 0x0f);
-		if (c < 0x0a)
-			c += 0x30;
-		else
-			c += 0x57;
-		line_buf[k++] = c;
-	  }
+	{
+		c = (int)((data[i] >> 0x4) & 0xf);
+		line_buf[k++] = hexdigits[c];
+		c = (int)(data[i] & 0xf);
+		line_buf[k++] = hexdigits[c];
+	}
 
 	line_buf[k] = 0;
 
-	return(line_buf);
+	return line_buf;
 }
 
 int
