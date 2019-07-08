@@ -24,7 +24,7 @@
 #define ARROW_COL	"\e[38;5;13m"
 #define BANNER_COL	"\e[38;5;202m"
 #define HIGHLIGHT_COL	"\e[38;5;246m"
-#define BUILD			"2.0.2"
+#define BUILD			"2.0.3"
 
 struct Node
 {
