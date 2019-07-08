@@ -412,7 +412,11 @@ scan_dirs(char *path)
 
 	} // while ((dir_inf = readdir()) != NULL)
 
-	debug("finished main loop");
+	if (dp)
+	{
+		closedir(dp);
+		dp = NULL;
+	}
 
 #ifdef __APPLE__
 	fini:
