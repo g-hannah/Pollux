@@ -30,36 +30,49 @@ static char *hexdigits = "0123456789abcdef";
 
 struct Node
 {
-	int		array;
+	int			array;
 	char		*name;
-	size_t		size;
-	struct Node	*l;
-	struct Node	*r;
-	struct Node	*s;
+	size_t	size;
+	struct	Node	*l;
+	struct	Node	*r;
+	struct	Node	*s;
 	char		hash[HASH_SIZE];
 };
 
 typedef struct Node Node;
 
 /* option flags */
+#define IGNORE_HIDDEN 0x1
+#define NO_DELETE			0x2
+#define QUIET					0x4
+#define	DEBUG_MODE		0x8
+
+static uint16_t user_options;
+#define flag_is_set(f) (user_options & (f))
+
+#if 0
 int		IGNORE_HIDDEN = 0;
 int		NO_DELETE = 0;
 int		QUIET = 0;
 int		DEBUG = 0;
+#endif
+
+#define for_each_arg(i) \
+	for ((i) = 0; (i) < argc; ++(i))
 
 struct stat	cur_file_stats;
-Node		*root = NULL;
-int		files_scanned = 0;
-int		dup_files = 0;
-int		tmp_fd = -1;
-FILE		*tmp_fp = NULL;
-uint64_t	used_bytes = 0;
-uint64_t	wasted_bytes = 0;
-time_t		start = 0, end = 0;
-char		*path = NULL;
+Node				*root = NULL;
+int					files_scanned = 0;
+int					dup_files = 0;
+int					tmp_fd = -1;
+FILE				*tmp_fp = NULL;
+uint64_t		used_bytes = 0;
+uint64_t		wasted_bytes = 0;
+time_t			start = 0, end = 0;
+char				*path = NULL;
 static char program_name[64];
 struct rlimit	rlims;
-char		**user_blacklist = NULL;
+char				**user_blacklist = NULL;
 char *illegal_terms[] = 
   {
 	"/sys",
@@ -77,13 +90,13 @@ char *illegal_terms[] =
 	"/var",
 	"/opt",
 	"/firmware",
-	"/Program Files/",
+	"/Program Files/", /* surely I'll port Pollux to Windows one day ... */
 	"/ProgramData/",
 	".dll",
 	".so",
 	".bin",
 	(char *)NULL
-  };
+};
 
 char		*line_buf = NULL;
 unsigned char	*hash_buf = NULL;
@@ -104,6 +117,8 @@ static void strip_crnl(char *) __nonnull ((1));
 static inline char *hexlify(unsigned char *, size_t) __nonnull ((1)) __wur;
 static void display_usage(const int) __attribute__ ((__noreturn__));
 static int check_file(const char *) __nonnull ((1)) __wur;
+static inline int contains_illegal(const char *) __nonnull((1)) __wur;
+static inline int contains_blacklisted(const char *) __nonnull((1)) __wur;
 
 static void log_err(char *, ...) __nonnull ((1));
 static void debug(char *, ...) __nonnull ((1));
@@ -113,12 +128,12 @@ static void pollux_fini(void) __attribute__ ((destructor));
 static int get_options(int, char *[]) __nonnull ((2)) __wur;
 static void print_stats(void);
 
+static void print_pollux_logo(void);
+
 int
 main(int argc, char *argv[])
 {
 	int 	r = 0;
-
-	IGNORE_HIDDEN = NO_DELETE = QUIET = DEBUG = 0;
 
 	strncpy(program_name, argv[0], strlen(argv[0]));
 	program_name[strlen(argv[0])] = 0;
@@ -140,30 +155,44 @@ main(int argc, char *argv[])
 	 */
 
 	if (isatty(STDOUT_FILENO))
-	  {
+	{
 			if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &winsz) < 0)
-		  	{ log_err("main: ioctl TIOCGWINSZ error"); goto fail; }
+		  {
+				log_err("main: ioctl TIOCGWINSZ error");
+				goto fail;
+			}
 
 			max_col = winsz.ws_col - 6;
-	  }
+	}
 	 
-
-	if (!NO_DELETE)
-	  {
+	if (!flag_is_set(NO_DELETE))
+	{
 		if ((tmp_fd = open(TMP_FILE, O_RDWR|O_CREAT|O_TRUNC, S_IRUSR|S_IWUSR)) < 0)
-		  { log_err("main: open error"); goto fail; }
+		{
+			log_err("main: open error");
+			goto fail;
+		}
 		if (!(tmp_fp = fdopen(tmp_fd, "r+")))
-		  { log_err("main: fdopen error"); goto fail; }
+		{
+			log_err("main: fdopen error");
+			goto fail;
+		}
 		if (setvbuf(tmp_fp, NULL, _IONBF, 0) < 0)
-		  { log_err("main: setvbuf error"); goto fail; }
-	  }
+		{
+			log_err("main: setvbuf error");
+			goto fail;
+		}
+	}
 
-	if (QUIET)
-	  {
+	if (flag_is_set(QUIET))
+	{
 		int		fd = -1;
 
 		if ((fd = open("/dev/null", O_RDWR)) < 0)
-		  { log_err("main: open error"); goto fail; }
+		{
+			log_err("main: open error");
+			goto fail;
+		}
 
 		if (fd != STDOUT_FILENO)
 			dup2(fd, STDOUT_FILENO);
@@ -172,26 +201,12 @@ main(int argc, char *argv[])
 
 		close(fd);
 		fd = -1;
-	  }
+	}
 
 	strncpy(path, argv[1], strlen(argv[1]));
 	path[strlen(argv[1])] = 0;
 
-	fprintf(stdout,
-			"\n%s"
-			"   OOOOOOOOO    OOOOOOOOO    OOOO        OOOO        OOOO     OOOO  OOOOOO     OOOOOO\n"
-			"  OOOOOOOOOOO  OOOOOOOOOOO  OOOOOO      OOOOOO      OOOOOO   OOOOOO  OOOOOO   OOOOOO \n"
-			" OOOOO  OOOOO OOOOOOOOOOOOO OOOOOO      OOOOOO      OOOOOO   OOOOOO   OOOOOO OOOOOO  \n"
-			" OOOOO  OOOOO OOOOO   OOOOO OOOOOO      OOOOOO      OOOOOO   OOOOOO    OOOOOOOOOOO   \n"
-			" OOOOOOOOOOOO OOOOO   OOOOO OOOOOO      OOOOOO      OOOOOO   OOOOOO     OOOOOOOOO    \n"
-			" OOOOOOOOOOO  OOOOO   OOOOO OOOOOO      OOOOOO      OOOOOO   OOOOOO    OOOOOOOOOOO   \n"
-			" OOOOO        OOOOOOOOOOOOO OOOOOOOOOO  OOOOOOOOOO  OOOOOOOOOOOOOOO   OOOOOO OOOOOO  \n"
-			" OOOOO         OOOOOOOOOOO  OOOOOOOOOOO OOOOOOOOOOO  OOOOOOOOOOOOO   OOOOOO   OOOOOO \n"
-			" OOOOO          OOOOOOOOO    OOOOOOOOO   OOOOOOOOO    OOOOOOOOOOO   OOOOOO     OOOOOO\e[m\n"
-			"\n"
-			" v%s\n\n",
-			BANNER_COL,
-			BUILD);
+	print_pollux_logo();
 
 	printf("Starting scan in %s%s\e[m\n\n", HIGHLIGHT_COL, argv[1]);
 
@@ -199,11 +214,7 @@ main(int argc, char *argv[])
 	r = scan_dirs(path);
 	time(&end);
 
-	debug("Scan ended with ret %d\n", r);
-
-	//sync();
-
-	if (!NO_DELETE)
+	if (!flag_is_set(NO_DELETE))
 	{
 		lseek(tmp_fd, 0, SEEK_SET);
 		while (fgets(line_buf, MAXLINE, tmp_fp) != NULL)
@@ -217,8 +228,10 @@ main(int argc, char *argv[])
 	debug("printing stats");
 	print_stats();
 
-	if (r < 0) exit(EXIT_FAILURE);
-	else exit(EXIT_SUCCESS);
+	if (r < 0)
+		exit(EXIT_FAILURE);
+	else
+		exit(EXIT_SUCCESS);
 
 	fail:
 	exit(EXIT_FAILURE);
@@ -233,78 +246,63 @@ scan_dirs(char *path)
 #ifndef __APPLE__
 	long		dir_position = 0;
 #endif
-	int		i = 0;
+	//int		i = 0;
 	int		dfd = -1;
-	int		illegal = 0;
+	//int		illegal = 0;
 	register int	loop_cnt = 0;
 
 	n = strlen(path);
 
 	if (n != 0)
-	  {
+	{
 		if (path[(n-1)] != 0x2f)
-	  	  {
+	  {
 			path[n++] = 0x2f;
 			path[n] = 0;
-	  	  }
 	  }
+	}
 
 	n_sv = n;
 
 	debug("scanning %s", path);
 
 	if ((dfd = open(path, O_RDONLY)) < 0)
-	  {
+	{
 		if (errno == EACCES) return(0);
 
 		log_err("scan_dirs: failed to open %s (line %d)", path, __LINE__);
 		goto fail;
-	  }
+	}
 
 	if (!(dp = fdopendir(dfd)))
-	  {
+	{
 		log_err("scan_dirs: failed open %s from fd (line %d)", path, __LINE__);
 		goto fail;
-	  }
+	}
 
-	debug("opened %s", path);
-
-	illegal = loop_cnt = 0;
+	loop_cnt = 0;
 
 	while ((dinf = readdir(dp)) != NULL)
 	{
 		++loop_cnt;
-		debug("in main loop: path %s", path);
 
-		if (strcmp(".", dinf->d_name) == 0
-		    || strcmp("..", dinf->d_name) == 0)
-		  { debug("continuing (%s)", dinf->d_name); continue; }
+		if (!strcmp(".", dinf->d_name)
+			|| !strcmp("..", dinf->d_name))
+		  continue;
 
-		if (IGNORE_HIDDEN) { if (dinf->d_name[0] == 0x2e) continue; }
-
-		debug("file %s", dinf->d_name);
+		if (flag_is_set(IGNORE_HIDDEN))
+		{
+			if (dinf->d_name[0] == 0x2e)
+				continue;
+		}
 
 		strncpy((path + n), dinf->d_name, strlen(dinf->d_name));
 		*(path + n + strlen(dinf->d_name)) = 0;
 
-		for (i = 0; illegal_terms[i] != NULL; ++i)
-		{
-			if (strstr(path, illegal_terms[i]))
-			  { debug("illegal term (%s) in path (%s)", illegal_terms[i], path); illegal = 1; }
-		}
-
-		if (illegal) { illegal = 0; continue; }		
-
-		if (user_blacklist != NULL)
-		{
-			for (i = 0; user_blacklist[i] != NULL; ++i)
-		  {
-				if (strstr(path, user_blacklist[i]))
-				  { debug("blacklisted term (%s) in path (%s)", user_blacklist[i], path); illegal = 1; }
-		  }
-
-			if (illegal) { illegal = 0; continue; }
-		}
+		if (contains_illegal(path))
+			continue;
+		if (contains_blacklisted(path))
+			continue;
 
 		memset(&cur_file_stats, 0, sizeof(cur_file_stats));
 		if (lstat(path, &cur_file_stats) < 0)
@@ -353,7 +351,7 @@ scan_dirs(char *path)
 			cur_file_name[strlen(dinf->d_name)] = 0;
 
 			closedir(dp);
-			close_excess_fds(NO_DELETE ? 3 : (tmp_fd + 1), rlims.rlim_cur);
+			close_excess_fds(flag_is_set(NO_DELETE) ? 3 : (tmp_fd + 1), rlims.rlim_cur);
 
 			if (scan_dirs(path) < 0) goto fail;
 
@@ -362,13 +360,18 @@ scan_dirs(char *path)
 			/* do not need to worry here about open() failing because we
 			 * already previously opened PATH with no problems
 			 */
-			if (!(dp = fdopendir(open(path, O_RDONLY)))) { log_err("insert_file: opendir error"); goto fail; }
+			if (!(dp = fdopendir(open(path, O_RDONLY))))
+			{
+				log_err("insert_file: opendir error");
+				goto fail;
+			}
 
 			rewinddir(dp);
 
 			dinf = readdir(dp);
 
-			if (! dinf) goto fini;
+			if (!dinf)
+				goto fini;
 
 			/*
 			 * Just read until we reach the file we were previously
@@ -378,9 +381,14 @@ scan_dirs(char *path)
 			while (strcmp(dinf->d_name, cur_file_name) != 0 && dinf)
 				dinf = readdir(dp);
 
-			if (! dinf) goto fini;
+			if (!dinf)
+				goto fini;
 
-			if (cur_file_name != NULL) { free(cur_file_name); cur_file_name = NULL; }
+			if (cur_file_name != NULL)
+			{
+				free(cur_file_name);
+				cur_file_name = NULL;
+			}
 
 #else
 			dir_position = telldir(dp);
@@ -388,11 +396,12 @@ scan_dirs(char *path)
 			closedir(dp);
 			dp = NULL;
 
-			close_excess_fds(NO_DELETE ? 3 : (tmp_fd + 1), rlims.rlim_cur);
+			close_excess_fds(flag_is_set(NO_DELETE) ? 3 : (tmp_fd + 1), rlims.rlim_cur);
 
 			debug("descending into %s", path);
 
-			if (scan_dirs(path) < 0) goto fail;
+			if (scan_dirs(path) < 0)
+				goto fail;
 
 			path[n] = 0;
 
@@ -680,7 +689,7 @@ debug(char *fmt, ...)
 	va_list		args;
 	char		*tmp = NULL;
 
-	if (DEBUG)
+	if (flag_is_set(DEBUG_MODE))
 	  {
 		tmp = calloc(MAXLINE, 1);
 		memset(tmp, 0, MAXLINE);
@@ -775,8 +784,9 @@ get_options(int argc, char *argv[])
 	int		i = 0, j = 0;
 	int		blist_idx = 0;
 
-	for (i = 1; i < argc; ++i)
-	  {
+	for_each_arg(i)
+	//for (i = 1; i < argc; ++i)
+	{
 		while (i < argc
 			&& strncmp("-", argv[i], 1) != 0
 			&& strncmp("--", argv[i], 2) != 0)
@@ -786,15 +796,13 @@ get_options(int argc, char *argv[])
 
 		if (strcmp("--help", argv[i]) == 0
 			|| strcmp("-h", argv[i]) == 0)
-		  {
+		{
 				display_usage(EXIT_SUCCESS);
-
-				exit(EXIT_SUCCESS);
-		  }
+		}
 		else
 		if (strcmp("--blacklist", argv[i]) == 0
 			|| strcmp("-B", argv[i]) == 0)
-		  {
+		{
 			if (!(user_blacklist = calloc(1, sizeof(char *))))
 			  { log_err("get_options: calloc error"); goto fail; }
 
@@ -807,7 +815,7 @@ get_options(int argc, char *argv[])
 			while (j < argc
 				&& strncmp("-", argv[j], 1) != 0
 				&& strncmp("--", argv[j], 2) != 0)
-			  {
+			{
 				if (!(user_blacklist[blist_idx] = calloc(64, 1)))
 				  { log_err("get_options: calloc error"); goto fail; }
 
@@ -820,37 +828,37 @@ get_options(int argc, char *argv[])
 
 				if (!(user_blacklist = realloc(user_blacklist, ((blist_idx+1) * sizeof(char *)))))
 				  { log_err("get_options: realloc error"); goto fail; }
-			  }
+			}
 
 			user_blacklist[blist_idx] = NULL;
 
 			i = (j-1);
-		  }
+		}
 		else if (strcmp("--nodelete", argv[i]) == 0
 			|| strcmp("-N", argv[i]) == 0)
-		  {
-			NO_DELETE = 1;
-		  }
+		{
+			user_options |= NO_DELETE;
+		}
 		else if (strcmp("--nohidden", argv[i]) == 0)
-		  {
-			IGNORE_HIDDEN = 1;
-		  }
+		{
+			user_options |= IGNORE_HIDDEN;
+		}
 		else if (strcmp("--quiet", argv[i]) == 0
 			|| strcmp("-q", argv[i]) == 0)
-		  {
-			QUIET = 1;
-		  }
+		{
+			user_options |= QUIET;
+		}
 		else
 		if (strcmp("--debug", argv[i]) == 0
 			|| strcmp("-D", argv[i]) == 0)
-		  {
-			DEBUG = 1;
-		  }
+		{
+			user_options |= DEBUG_MODE;
+		}
 		else
-		  {
+		{
 			continue;
-		  }
-	  }
+		}
+	}
 
 	return(0);
 
@@ -989,7 +997,7 @@ print_stats(void)
 			"%22s: %.2lf %s\n"
 			"%22s: %.4lf%%\n",
 			"Files scanned", files_scanned,
-			(NO_DELETE?"Duplicate files":"Removed files"), dup_files,
+			(flag_is_set(NO_DELETE)?"Duplicate files":"Removed files"), dup_files,
 			"Used memory",
 			(used_bytes>999999999999999?(double)used_bytes/(double)1000000000000000:
 		 	used_bytes>999999999999?(double)used_bytes/(double)1000000000000:
@@ -1001,7 +1009,7 @@ print_stats(void)
 		 	used_bytes>999999999?"GB":
 		 	used_bytes>999999?"MB":
 		 	used_bytes>999?"KB":"bytes"),
-			(NO_DELETE?"Wasted memory":"Freed memory"),
+			(flag_is_set(NO_DELETE)?"Wasted memory":"Freed memory"),
 			(wasted_bytes>999999999999999?(double)wasted_bytes/(double)1000000000000000:
 		 	wasted_bytes>999999999999?(double)wasted_bytes/(double)1000000000000:
 		 	wasted_bytes>999999999?(double)wasted_bytes/(double)1000000000:
@@ -1012,7 +1020,7 @@ print_stats(void)
 		 	wasted_bytes>999999999?"GB":
 		 	wasted_bytes>999999?"MB":
 		 	wasted_bytes>999?"KB":"bytes"),
-			(NO_DELETE?"Wasted/Used":"Freed/Used"),
+			(flag_is_set(NO_DELETE)?"Wasted/Used":"Freed/Used"),
 			((double)wasted_bytes/(double)used_bytes)*100);
 
 			if (fd > 0)
@@ -1033,7 +1041,7 @@ print_stats(void)
 		"%22s: %.2lf %s\n"
 		"%22s: %.4lf%%\n",
 		"Files scanned", files_scanned,
-		(NO_DELETE?"Duplicate files":"Removed files"), (dup_files+ret),
+		(flag_is_set(NO_DELETE)?"Duplicate files":"Removed files"), (dup_files+ret),
 		"Used memory",
 		(used_bytes>999999999999999?(double)used_bytes/(double)1000000000000000:
 		 used_bytes>999999999999?(double)used_bytes/(double)1000000000000:
@@ -1045,7 +1053,7 @@ print_stats(void)
 		 used_bytes>999999999?"GB":
 		 used_bytes>999999?"MB":
 		 used_bytes>999?"KB":"bytes"),
-		(NO_DELETE?"Wasted memory":"Freed memory"),
+		(flag_is_set(NO_DELETE)?"Wasted memory":"Freed memory"),
 		(wasted_bytes>999999999999999?(double)wasted_bytes/(double)1000000000000000:
 		 wasted_bytes>999999999999?(double)wasted_bytes/(double)1000000000000:
 		 wasted_bytes>999999999?(double)wasted_bytes/(double)1000000000:
@@ -1056,15 +1064,19 @@ print_stats(void)
 		 wasted_bytes>999999999?"GB":
 		 wasted_bytes>999999?"MB":
 		 wasted_bytes>999?"KB":"bytes"),
-		(NO_DELETE?"Wasted/Used":"Freed/Used"),
+		(flag_is_set(NO_DELETE)?"Wasted/Used":"Freed/Used"),
 		((double)wasted_bytes/(double)used_bytes)*100);
 	  }
 
 	fputc(0x0a, stdout);
 
-	if (QUIET)
+	if (flag_is_set(QUIET))
 	{
-		if (quiet_out) { free(quiet_out); quiet_out = NULL; }
+		if (quiet_out)
+		{
+			free(quiet_out);
+			quiet_out = NULL;
+		}
 	}
 
 	return;
@@ -1128,7 +1140,7 @@ print_and_decide(char *hash, char *f1, char *f2, FILE *fp)
 {
 	int		choice = 0;
 
-	if (!NO_DELETE)
+	if (!flag_is_set(NO_DELETE))
 	  {
 		choice = remove_which(f1, f2);
 		if (choice < 0) { return(-1); }
@@ -1302,4 +1314,57 @@ display_usage(const int exit_status)
 		program_name);
 
 	exit(exit_status);
+}
+
+void
+print_pollux_logo(void)
+{
+	fprintf(stdout,
+			"\n%s"
+			"   OOOOOOOOO    OOOOOOOOO    OOOO        OOOO        OOOO     OOOO  OOOOOO     OOOOOO\n"
+			"  OOOOOOOOOOO  OOOOOOOOOOO  OOOOOO      OOOOOO      OOOOOO   OOOOOO  OOOOOO   OOOOOO \n"
+			" OOOOO  OOOOO OOOOOOOOOOOOO OOOOOO      OOOOOO      OOOOOO   OOOOOO   OOOOOO OOOOOO  \n"
+			" OOOOO  OOOOO OOOOO   OOOOO OOOOOO      OOOOOO      OOOOOO   OOOOOO    OOOOOOOOOOO   \n"
+			" OOOOOOOOOOOO OOOOO   OOOOO OOOOOO      OOOOOO      OOOOOO   OOOOOO     OOOOOOOOO    \n"
+			" OOOOOOOOOOO  OOOOO   OOOOO OOOOOO      OOOOOO      OOOOOO   OOOOOO    OOOOOOOOOOO   \n"
+			" OOOOO        OOOOOOOOOOOOO OOOOOOOOOO  OOOOOOOOOO  OOOOOOOOOOOOOOO   OOOOOO OOOOOO  \n"
+			" OOOOO         OOOOOOOOOOO  OOOOOOOOOOO OOOOOOOOOOO  OOOOOOOOOOOOO   OOOOOO   OOOOOO \n"
+			" OOOOO          OOOOOOOOO    OOOOOOOOO   OOOOOOOOO    OOOOOOOOOOO   OOOOOO     OOOOOO\e[m\n"
+			"\n"
+			" v%s\n\n",
+			BANNER_COL,
+			BUILD);
+
+	return;
+}
+
+int
+contains_illegal(const char *path)
+{
+	int		i;
+
+	for (i = 0; illegal_terms[i] != NULL; ++i)
+	{
+		if (strstr(path, illegal_terms[i]))
+			return 1;
+	}
+
+	return 0;
+}
+
+int
+contains_blacklisted(const char *path)
+{
+	int		i;
+
+	if (user_blacklist)
+	{
+		for (i = 0; user_blacklist[i] != NULL; ++i)
+		{
+			if (strstr(path, user_blacklist[i]))
+				return 1;
+		}
+	}
+
+	return 0;
 }
