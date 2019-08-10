@@ -3,7 +3,7 @@ CFILES=pollux.c
 OFILES=pollux.o
 WFLAGS=-Wall -Werror
 LIBS=-lcrypto
-BUILD=2.0.3
+BUILD=2.0.4
 DEBUG:=0
 
 .PHONY: clean
