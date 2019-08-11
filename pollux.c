@@ -42,23 +42,20 @@ struct Node
 typedef struct Node Node;
 
 /* option flags */
-#define IGNORE_HIDDEN 0x1
-#define NO_DELETE			0x2
-#define QUIET					0x4
-#define	DEBUG_MODE		0x8
+#define UF_IGNORE_HIDDEN	0x1
+#define UF_NO_DELETE			0x2
+#define UF_QUIET_MODE			0x4
+#define	UF_DEBUG_MODE			0x8
 
 static uint16_t user_options;
 #define flag_is_set(f) (user_options & (f))
 
-#if 0
-int		IGNORE_HIDDEN = 0;
-int		NO_DELETE = 0;
-int		QUIET = 0;
-int		DEBUG = 0;
-#endif
-
 #define for_each_arg(i) \
 	for ((i) = 0; (i) < argc; ++(i))
+
+#define __hot __attribute__((hot))
+#define __cold __attribute__((cold))
+#define __noret __attribute__((__noreturn__))
 
 struct stat	cur_file_stats;
 Node				*root = NULL;
@@ -73,7 +70,7 @@ char				*path = NULL;
 static char program_name[64];
 struct rlimit	rlims;
 char				**user_blacklist = NULL;
-char *illegal_terms[] = 
+const char *illegal_terms[] = 
   {
 	"/sys",
 	"/usr",
@@ -106,26 +103,26 @@ char		*block = NULL;
 struct winsize	winsz;
 int		max_col = 0;
 
-static int insert_file(Node **, char *, size_t, FILE *) __nonnull ((1,2,4)) __wur;
-static void free_tree(Node **) __nonnull ((1));
-static int scan_dirs(char *) __nonnull ((1)) __wur;
-static int print_and_decide(char *, char *, char *, FILE *) __nonnull ((1,2,3,4)) __wur;
-static int remove_which(char *, char *) __nonnull ((1,2)) __wur;
-static unsigned char *get_sha256_file(char *) __nonnull ((1)) __wur;
+static int insert_file(Node **, char *, size_t, FILE *) __hot __nonnull((1,2,4)) __wur;
+static void free_tree(Node **) __nonnull((1));
+static int scan_dirs(char *) __nonnull((1)) __wur;
+static int print_and_decide(char *, char *, char *, FILE *) __nonnull((1,2,3,4)) __wur;
+static int remove_which(char *, char *) __nonnull((1,2)) __wur;
+static unsigned char *get_sha256_file(char *) __nonnull((1)) __wur;
 static void close_excess_fds(int, int);
-static void strip_crnl(char *) __nonnull ((1));
-static inline char *hexlify(unsigned char *, size_t) __nonnull ((1)) __wur;
-static void display_usage(const int) __attribute__ ((__noreturn__));
-static int check_file(const char *) __nonnull ((1)) __wur;
+static void strip_crnl(char *) __nonnull((1));
+static inline char *hexlify(unsigned char *, size_t) __nonnull((1)) __wur;
+static void display_usage(const int) __noret;
+static int check_file(const char *) __nonnull((1)) __wur;
 static inline int contains_illegal(const char *) __nonnull((1)) __wur;
 static inline int contains_blacklisted(const char *) __nonnull((1)) __wur;
 
-static void log_err(char *, ...) __nonnull ((1));
-static void debug(char *, ...) __nonnull ((1));
-static void signal_handler(int) __attribute__ ((__noreturn__));
-static void pollux_init(void) __attribute__ ((constructor));
-static void pollux_fini(void) __attribute__ ((destructor));
-static int get_options(int, char *[]) __nonnull ((2)) __wur;
+static void log_err(char *, ...) __nonnull((1));
+static void debug(char *, ...) __nonnull((1));
+static void signal_handler(int) __cold __noret;
+static void pollux_init(void) __attribute__((constructor));
+static void pollux_fini(void) __attribute__((destructor));
+static int get_options(int, char *[]) __nonnull((2)) __wur;
 static void print_stats(void);
 
 static void print_pollux_logo(void);
@@ -148,12 +145,11 @@ main(int argc, char *argv[])
 		goto fail;
 
 	/*
-	 * Might be using Cron to run us, so test first before doing ioctl() for
-	 * TIOCGWINSZ, otherwise it will fail. Getting terminal dimensions needs
-	 * to be done here and not in the constructor function, because they
-	 * are not known before main()
+	 * Might be run by a daemon process (e.g., Cron), so test first before
+	 * doing ioctl() for TIOCGWINSZ, otherwise it will fail. Getting terminal
+	 * dimensions needs to be done here and not in the constructor function,
+	 * because they are not known before main()
 	 */
-
 	if (isatty(STDOUT_FILENO))
 	{
 			if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &winsz) < 0)
@@ -165,7 +161,7 @@ main(int argc, char *argv[])
 			max_col = winsz.ws_col - 6;
 	}
 	 
-	if (!flag_is_set(NO_DELETE))
+	if (!flag_is_set(UF_NO_DELETE))
 	{
 		if ((tmp_fd = open(TMP_FILE, O_RDWR|O_CREAT|O_TRUNC, S_IRUSR|S_IWUSR)) < 0)
 		{
@@ -184,7 +180,7 @@ main(int argc, char *argv[])
 		}
 	}
 
-	if (flag_is_set(QUIET))
+	if (flag_is_set(UF_QUIET_MODE))
 	{
 		int		fd = -1;
 
@@ -214,7 +210,7 @@ main(int argc, char *argv[])
 	r = scan_dirs(path);
 	time(&end);
 
-	if (!flag_is_set(NO_DELETE))
+	if (!flag_is_set(UF_NO_DELETE))
 	{
 		lseek(tmp_fd, 0, SEEK_SET);
 		while (fgets(line_buf, MAXLINE, tmp_fp) != NULL)
@@ -290,7 +286,7 @@ scan_dirs(char *path)
 			|| !strcmp("..", dinf->d_name))
 		  continue;
 
-		if (flag_is_set(IGNORE_HIDDEN))
+		if (flag_is_set(UF_IGNORE_HIDDEN))
 		{
 			if (dinf->d_name[0] == 0x2e)
 				continue;
@@ -351,7 +347,7 @@ scan_dirs(char *path)
 			cur_file_name[strlen(dinf->d_name)] = 0;
 
 			closedir(dp);
-			close_excess_fds(flag_is_set(NO_DELETE) ? 3 : (tmp_fd + 1), rlims.rlim_cur);
+			close_excess_fds(flag_is_set(UF_NO_DELETE) ? 3 : (tmp_fd + 1), rlims.rlim_cur);
 
 			if (scan_dirs(path) < 0) goto fail;
 
@@ -396,7 +392,7 @@ scan_dirs(char *path)
 			closedir(dp);
 			dp = NULL;
 
-			close_excess_fds(flag_is_set(NO_DELETE) ? 3 : (tmp_fd + 1), rlims.rlim_cur);
+			close_excess_fds(flag_is_set(UF_NO_DELETE) ? 3 : (tmp_fd + 1), rlims.rlim_cur);
 
 			debug("descending into %s", path);
 
@@ -689,7 +685,7 @@ debug(char *fmt, ...)
 	va_list		args;
 	char		*tmp = NULL;
 
-	if (flag_is_set(DEBUG_MODE))
+	if (flag_is_set(UF_DEBUG_MODE))
 	  {
 		tmp = calloc(MAXLINE, 1);
 		memset(tmp, 0, MAXLINE);
@@ -837,22 +833,22 @@ get_options(int argc, char *argv[])
 		else if (strcmp("--nodelete", argv[i]) == 0
 			|| strcmp("-N", argv[i]) == 0)
 		{
-			user_options |= NO_DELETE;
+			user_options |= UF_NO_DELETE;
 		}
 		else if (strcmp("--nohidden", argv[i]) == 0)
 		{
-			user_options |= IGNORE_HIDDEN;
+			user_options |= UF_IGNORE_HIDDEN;
 		}
 		else if (strcmp("--quiet", argv[i]) == 0
 			|| strcmp("-q", argv[i]) == 0)
 		{
-			user_options |= QUIET;
+			user_options |= UF_QUIET_MODE;
 		}
 		else
 		if (strcmp("--debug", argv[i]) == 0
 			|| strcmp("-D", argv[i]) == 0)
 		{
-			user_options |= DEBUG_MODE;
+			user_options |= UF_DEBUG_MODE;
 		}
 		else
 		{
@@ -885,7 +881,7 @@ print_stats(void)
 
 	time_taken = (end - start);
 
-	if (QUIET)
+	if (UF_QUIET_MODE)
 	  {
 		char	*home_dir = NULL;
 
@@ -893,7 +889,7 @@ print_stats(void)
 		quiet_out = calloc(MAXLINE, 1);
 		if (quiet_out && home_dir)
 			sprintf(quiet_out, "%s/pollux_scan_results.txt", home_dir);
-		fd = open(quiet_out, O_RDWR|O_CREAT|O_TRUNC, S_IRWXU & ~S_IXUSR);
+		fd = open(quiet_out, O_RDWR|O_CREAT|O_TRUNC, S_IRUSR|S_IWUSR);
 	  }
 
 	if (time_taken > 3599)
@@ -907,8 +903,8 @@ print_stats(void)
 		minutes = (seconds / 60);
 		seconds -= (minutes * 60);
 
-		if (QUIET)
-		  {
+		if (flag_is_set(UF_QUIET_MODE))
+		{
 
 			sprintf(line_buf,
 				"%22s: %ld hour%s %ld minute%s %ld second%s\n",
@@ -922,9 +918,9 @@ print_stats(void)
 
 			if (fd > 0)
 				ret = write(fd, line_buf, strlen(line_buf));
-		  }
+		}
 		else
-		  {
+		{
 			fprintf(stdout, "%22s: %ld hour%s %ld minute%s %ld second%s\n",
 				"Time elapsed",
 				hours,
@@ -933,18 +929,18 @@ print_stats(void)
 				(minutes==1?"":"s"),
 				seconds,
 				(seconds==1?"":"s"));
-		  }
-	  }
+		}
+	}
 	else if (time_taken > 59)
-	  {
+	{
 		time_t	minutes;
 		time_t	seconds;
 
 		minutes = (time_taken / 60);
 		seconds = (time_taken % 60);
 
-		if (QUIET)
-		  {
+		if (flag_is_set(UF_QUIET_MODE))
+		{
 			sprintf(line_buf,
 				"%22s: %ld minute%s %ld second%s\n",
 				"Time elapsed",
@@ -955,21 +951,21 @@ print_stats(void)
 
 			if (fd > 0)
 				ret = write(fd, line_buf, strlen(line_buf));
-		  }
+		}
 		else
-		  {
+		{
 			fprintf(stdout, "%22s: %ld minute%s %ld second%s\n",
 				"Time elapsed",
 				minutes,
 				(minutes==1?"":"s"),
 				seconds,
 				(seconds==1?"":"s"));
-		  }
-	  }
+		}
+	}
 	else
-	  {
-		if (QUIET)
-		  {
+	{
+		if (flag_is_set(UF_QUIET_MODE))
+		{
 			sprintf(line_buf,
 				"%22s: %ld second%s\n",
 				"Time elapsed",
@@ -978,18 +974,18 @@ print_stats(void)
 
 			if (fd > 0)
 				ret = write(fd, line_buf, strlen(line_buf));
-		  }
+		}
 		else
-		  {
+		{
 			fprintf(stdout, "%22s: %ld second%s\n",
 				"Time elapsed",
 				time_taken,
 				(time_taken==1?"":"s"));
-		  }
-	  }
+		}
+	}
 
-	if (QUIET)
-	  {
+	if (flag_is_set(UF_QUIET_MODE))
+	{
 		sprintf(line_buf,
 			"%22s: %d\n"
 			"%22s: %d\n"
@@ -997,7 +993,7 @@ print_stats(void)
 			"%22s: %.2lf %s\n"
 			"%22s: %.4lf%%\n",
 			"Files scanned", files_scanned,
-			(flag_is_set(NO_DELETE)?"Duplicate files":"Removed files"), dup_files,
+			(flag_is_set(UF_NO_DELETE)?"Duplicate files":"Removed files"), dup_files,
 			"Used memory",
 			(used_bytes>999999999999999?(double)used_bytes/(double)1000000000000000:
 		 	used_bytes>999999999999?(double)used_bytes/(double)1000000000000:
@@ -1009,7 +1005,7 @@ print_stats(void)
 		 	used_bytes>999999999?"GB":
 		 	used_bytes>999999?"MB":
 		 	used_bytes>999?"KB":"bytes"),
-			(flag_is_set(NO_DELETE)?"Wasted memory":"Freed memory"),
+			(flag_is_set(UF_NO_DELETE)?"Wasted memory":"Freed memory"),
 			(wasted_bytes>999999999999999?(double)wasted_bytes/(double)1000000000000000:
 		 	wasted_bytes>999999999999?(double)wasted_bytes/(double)1000000000000:
 		 	wasted_bytes>999999999?(double)wasted_bytes/(double)1000000000:
@@ -1020,14 +1016,14 @@ print_stats(void)
 		 	wasted_bytes>999999999?"GB":
 		 	wasted_bytes>999999?"MB":
 		 	wasted_bytes>999?"KB":"bytes"),
-			(flag_is_set(NO_DELETE)?"Wasted/Used":"Freed/Used"),
+			(flag_is_set(UF_NO_DELETE)?"Wasted/Used":"Freed/Used"),
 			((double)wasted_bytes/(double)used_bytes)*100);
 
 			if (fd > 0)
 				ret = write(fd, line_buf, strlen(line_buf));
-	  }
+	}
 	else
-	  {
+	{
 	/*
 	 * Want to avoid the compiler complaining about the unused result of write()
 	 * so resetting to zero and using it in an add operation in the following
@@ -1041,7 +1037,7 @@ print_stats(void)
 		"%22s: %.2lf %s\n"
 		"%22s: %.4lf%%\n",
 		"Files scanned", files_scanned,
-		(flag_is_set(NO_DELETE)?"Duplicate files":"Removed files"), (dup_files+ret),
+		(flag_is_set(UF_NO_DELETE)?"Duplicate files":"Removed files"), (dup_files+ret),
 		"Used memory",
 		(used_bytes>999999999999999?(double)used_bytes/(double)1000000000000000:
 		 used_bytes>999999999999?(double)used_bytes/(double)1000000000000:
@@ -1053,7 +1049,7 @@ print_stats(void)
 		 used_bytes>999999999?"GB":
 		 used_bytes>999999?"MB":
 		 used_bytes>999?"KB":"bytes"),
-		(flag_is_set(NO_DELETE)?"Wasted memory":"Freed memory"),
+		(flag_is_set(UF_NO_DELETE)?"Wasted memory":"Freed memory"),
 		(wasted_bytes>999999999999999?(double)wasted_bytes/(double)1000000000000000:
 		 wasted_bytes>999999999999?(double)wasted_bytes/(double)1000000000000:
 		 wasted_bytes>999999999?(double)wasted_bytes/(double)1000000000:
@@ -1064,13 +1060,13 @@ print_stats(void)
 		 wasted_bytes>999999999?"GB":
 		 wasted_bytes>999999?"MB":
 		 wasted_bytes>999?"KB":"bytes"),
-		(flag_is_set(NO_DELETE)?"Wasted/Used":"Freed/Used"),
+		(flag_is_set(UF_NO_DELETE)?"Wasted/Used":"Freed/Used"),
 		((double)wasted_bytes/(double)used_bytes)*100);
-	  }
+	}
 
 	fputc(0x0a, stdout);
 
-	if (flag_is_set(QUIET))
+	if (flag_is_set(UF_QUIET_MODE))
 	{
 		if (quiet_out)
 		{
@@ -1140,7 +1136,7 @@ print_and_decide(char *hash, char *f1, char *f2, FILE *fp)
 {
 	int		choice = 0;
 
-	if (!flag_is_set(NO_DELETE))
+	if (!flag_is_set(UF_NO_DELETE))
 	  {
 		choice = remove_which(f1, f2);
 		if (choice < 0) { return(-1); }
