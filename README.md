@@ -6,3 +6,6 @@ Pollux scans directories recursively and creates a binary tree of filenames and 
 exact same size, Pollux calculates their respective SHA-256 message digests and compares them. If they are the same, the files
 are duplicate files; otherwise, an array pointed to by the node in the tree is created, where all same-sized files are kept,
 along with their message digests for quick comparison.
+
+# Sample Program Output
+![alt text](Sample_pollux_output.png)
