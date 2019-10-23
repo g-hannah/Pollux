@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -16,6 +17,9 @@
 #include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
+#include "cache.h"
+
+#define __ALIGN_SIZE(s) (((s) + 0xf) & ~(0xf))
 
 #define MAXLINE		1024
 #define BLK_SIZE	8192
@@ -27,6 +31,7 @@
 #define BUILD			"2.0.4"
 
 static char *hexdigits = "0123456789abcdef";
+static cache_t *node_cache;
 
 struct Node
 {
@@ -101,6 +106,7 @@ char		*line_buf = NULL;
 unsigned char	*hash_buf = NULL;
 char		*hash_hex = NULL;
 char		*block = NULL;
+int path_max = 0;
 
 struct winsize	winsz;
 int		max_col = 0;
@@ -126,16 +132,50 @@ static void pollux_init(void) __attribute__((constructor));
 static void pollux_fini(void) __attribute__((destructor));
 static int get_options(int, char *[]) __nonnull((2)) __wur;
 static void print_stats(void);
+static int pollux_node_cache_ctor(void *) __nonnull((1)) __wur;
+static void pollux_node_cache_dtor(void *) __nonnull((1));
 
 static void print_pollux_logo(void);
+
+int
+pollux_node_cache_ctor(void *obj)
+{
+	struct Node *__n = (struct Node *)obj;
+
+	__n->name = calloc(path_max, 1);
+
+	assert(__n->name);
+
+	__n->l = NULL;
+	__n->r = NULL;
+	__n->s = NULL;
+	__n->array = 0;
+	__n->hash[0] = 0;
+
+	return 0;
+}
+
+void
+pollux_node_cache_dtor(void *obj)
+{
+	struct Node *__n = (struct Node *)obj;
+
+	free(__n->name);
+
+	if (__n->s)
+		free(__n->s);
+
+	return;
+}
 
 int
 main(int argc, char *argv[])
 {
 	int 	r = 0;
+	size_t prog_name_len = strlen(argv[0]);
 
-	strncpy(program_name, argv[0], strlen(argv[0]));
-	program_name[strlen(argv[0])] = 0;
+	memcpy((void *)program_name, (void *)argv[0], prog_name_len);
+	program_name[prog_name_len] = 0;
 
 	if (argc < 2)
 			display_usage(EXIT_FAILURE);
@@ -203,8 +243,9 @@ main(int argc, char *argv[])
 		fd = -1;
 	}
 
-	strncpy(path, argv[1], strlen(argv[1]));
-	path[strlen(argv[1])] = 0;
+	size_t pathlen = strlen(argv[1]);
+	memcpy((void *)path, (void *)argv[1], pathlen);
+	path[pathlen] = 0;
 
 	print_pollux_logo();
 
@@ -305,7 +346,6 @@ scan_dirs(char *path)
 			continue;
 
 		clear_struct(&cur_file_stats);
-		//memset(&cur_file_stats, 0, sizeof(cur_file_stats));
 		if (lstat(path, &cur_file_stats) < 0)
 		{
 			if (errno == EACCES)
@@ -451,13 +491,15 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 	unsigned char	*comp_file_hash = NULL;
 	char		*h = NULL;
 	Node		*nptr = NULL;
-	size_t		l = 0, rl = 0;
+	size_t		l = 0;
+	size_t rl = 0;
 
 	l = strlen(fname);
-	rl = ((l + 0xf) & ~(0xf));
+	rl = __ALIGN_SIZE(l);
 
 	if (*root == NULL)
 	{
+#if 0
 		if (!((*root) = malloc(sizeof(Node))))
 		{
 			log_err("insert_file: malloc error");
@@ -471,15 +513,22 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 			log_err("insert_file: calloc error");
 			goto fail;
 		}
+#endif
 
-		strncpy((*root)->name, fname, l);
+		*root = (struct Node *)cache_alloc(node_cache, root);
+		assert(*root);
+		assert(cache_obj_used(node_cache, *root));
+		assert((*root)->name);
+		assert(l < (size_t)path_max);
+
+		memcpy((void *)((*root)->name), (void *)fname, l);
 		(*root)->name[l] = 0;
-		(*root)->hash[0] = 0;
+	//	(*root)->hash[0] = 0;
 		(*root)->size = size;
-		(*root)->l = NULL;
-		(*root)->r = NULL;
-		(*root)->s = NULL;
-		(*root)->array = 0;
+	//	(*root)->l = NULL;
+	//	(*root)->r = NULL;
+	//	(*root)->s = NULL;
+	//	(*root)->array = 0;
 
 		return 0;
 	}
@@ -518,7 +567,7 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 			goto fail;
 		}
 
-		strncpy(hash_hex, h, HASH_SIZE);
+		memcpy((void *)hash_hex, (void *)h, HASH_SIZE);
 
 		if ((*root)->hash[0] == 0)
 		{
@@ -538,10 +587,10 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 				goto fail;
 			}
 
-			strncpy((*root)->hash, h, HASH_SIZE);
+			memcpy((void *)((*root)->hash), (void *)h, HASH_SIZE);
 		}
 
-		if (!strncmp(hash_hex, (*root)->hash, HASH_SIZE)) // duplicate files
+		if (!memcmp((void *)hash_hex, (void *)((*root)->hash), HASH_SIZE)) // duplicate files
 		{
 			wasted_bytes += cur_file_stats.st_size;
 			++dup_files;
@@ -560,7 +609,7 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 			 * Before, those nodes with the same size were joined using a linked list;
 			 * but due to not great performance (presumably due to non-contiguous
 			 * memory accesses while testing for a duplicate file in the linked list),
-			 * using a single array of nodes, which will go as needed. This should ensure
+			 * using a single array of nodes, which will grow as needed. This should ensure
 			 * better spatial locality and thus better usage of the fast cache memories
 			 */
 			if ((*root)->array == 0)
@@ -579,10 +628,10 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 					goto fail;
 				}
 
-				strncpy((*root)->s[0].name, fname, l);
+				memcpy((void *)((*root)->s[0].name), (void *)fname, l);
 				((*root)->s[0]).name[l] = 0;
 
-				strncpy((*root)->s[0].hash, hash_hex, HASH_SIZE);
+				memcpy((void *)((*root)->s[0].hash), (void *)hash_hex, HASH_SIZE);
 
 				((*root)->s[0]).size = size;
 				((*root)->s[0]).array = 0;
@@ -597,7 +646,7 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 				/* compare FNAME with two at a time each iteration */
 				for (i = 0; i < ((*root)->array - 1); i+=2)
 				{
-					if (!strncmp(hash_hex, ((*root)->s[i]).hash, HASH_SIZE))
+					if (!memcmp((void *)hash_hex, (void *)(((*root)->s[i]).hash), HASH_SIZE))
 		 			{
 						wasted_bytes += cur_file_stats.st_size;
 						++dup_files;
@@ -610,7 +659,7 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 
 						goto fini;
 					}
-					else if (!strncmp(hash_hex, ((*root)->s[i+1]).hash, HASH_SIZE))
+					else if (!memcmp((void *)hash_hex, (void *)(((*root)->s[i+1]).hash), HASH_SIZE))
 					{
 						wasted_bytes += cur_file_stats.st_size;
 						++dup_files;
@@ -634,7 +683,7 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 				 */
 				if (i < (*root)->array)
 				{
-					if (!strncmp(hash_hex, ((*root)->s[i]).hash, HASH_SIZE))
+					if (!memcmp((void *)hash_hex, (void *)(((*root)->s[i]).hash), HASH_SIZE))
 					{
 						wasted_bytes += cur_file_stats.st_size;
 						++dup_files;
@@ -677,10 +726,10 @@ insert_file(Node **root, char *fname, size_t size, FILE *fp)
 					goto fail;
 				}
 
-				strncpy(nptr->name, fname, l);
+				memcpy((void *)nptr->name, (void *)fname, l);
 				nptr->name[l] = 0;
 
-				strncpy(nptr->hash, hash_hex, HASH_SIZE);
+				memcpy((void *)nptr->hash, (void *)hash_hex, HASH_SIZE);
 
 				nptr->size = size;
 			}
@@ -723,13 +772,16 @@ free_tree(Node **root)
 		(*root)->array = 0;
 	}
 
+#if 0
 	if ((*root)->name)
 	{
 		free((*root)->name);
 		(*root)->name = NULL;
 	}
+#endif
 
-	free(*root);
+	cache_dealloc(node_cache, *root, root);
+//	free(*root);
 	*root = NULL;
 
 	return;
@@ -860,6 +912,20 @@ pollux_init(void)
 		goto fail;
 	}
 
+	if (!(node_cache = cache_create("node_cache",
+		sizeof(struct Node),
+		0,
+		pollux_node_cache_ctor,
+		pollux_node_cache_dtor)))
+	{
+		log_err("pollux_init: failed to create cache for node objects\n");
+		goto fail;
+	}
+
+	path_max = pathconf("/", _PC_PATH_MAX);
+	if (!path_max)
+		path_max = 4096;
+
 	return;
 
 	fail:
@@ -900,6 +966,12 @@ pollux_fini(void)
 	{
 		free(block);
 		block = NULL;
+	}
+
+	if (node_cache)
+	{
+		cache_clear_all(node_cache);
+		cache_destroy(node_cache);
 	}
 }
 
