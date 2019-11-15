@@ -35,9 +35,6 @@ static void setup_window(GtkApplication *, gpointer) __nonnull ((1,2));
 static void on_digest_select(GtkWidget *, gpointer) __nonnull((1,2));
 static void on_start_scan(GtkWidget *, gpointer) __nonnull((1));
 
-static gchar home_dir[PATH_MAX];
-static gchar *path_buf;
-
 struct digest_size
 {
 	gsize binary;
@@ -70,21 +67,21 @@ struct digest_size digest_sizes[NR_DIGESTS] =
 
 struct digest_opt
 {
-	GtkWidget *radio;
+	GtkWidget *menu_item;
 	gint type;
 	gchar *name;
 	gcallback_t set_digest_func;
 };
 
-static GtkWidget radio_md5;
-static GtkWidget radio_sha256;
-static GtkWidget radio_sha512;
+static GtkWidget o_md5;
+static GtkWidget o_sha256;
+static GtkWidget o_sha512;
 
 struct digest_opt hash_digests[NR_DIGESTS] =
 {
-	{ &radio_md5, DIGEST_MD5, "MD5", on_digest_select },
-	{ &radio_sha256, DIGEST_SHA256, "SHA256", on_digest_select },
-	{ &radio_sha512, DIGEST_SHA512, "SHA512", on_digest_select }
+	{ &o_md5, DIGEST_MD5, "MD5", on_digest_select },
+	{ &o_sha256, DIGEST_SHA256, "SHA256", on_digest_select },
+	{ &o_sha512, DIGEST_SHA512, "SHA512", on_digest_select }
 };
 
 struct file_node
@@ -109,11 +106,18 @@ struct pollux_ctx
 	guint wasted_mem;
 	struct file_node *root;
 
-	struct options
+	struct
 	{
 		gint digest_type;
 		gint no_hidden;
 	} options;
+
+	struct
+	{
+		GtkWidget *window;
+		GtkWidget *grid;
+		struct digest_opt *digests;
+	} gui;
 
 #define digest_type options.digest_type
 #define no_hidden options.no_hidden
@@ -122,7 +126,7 @@ struct pollux_ctx
  * Do not keep an ITER arg here because tree
  * iters are ephemeral, living on the stack.
  */
-	struct tree
+	struct
 	{
 		GtkTreeStore *store;
 		GtkWidget *view;
@@ -218,8 +222,8 @@ plx_get_file_digest(gchar **digest, gchar *filename)
 
 	switch(plx_ctx.digest_type)
 	{
-		case DIGEST_MD5:
-			if (1 != EVP_DigestInit_ex(ctx, EVP_md5(), NULL))
+		case DIGEST_SHA256:
+			if (1 != EVP_DigestInit_ex(ctx, EVP_sha256(), NULL))
 				goto fail;
 			break;
 		case DIGEST_SHA512:
@@ -227,7 +231,7 @@ plx_get_file_digest(gchar **digest, gchar *filename)
 				goto fail;
 			break;
 		default:
-			if (1 != EVP_DigestInit_ex(ctx, EVP_sha256(), NULL))
+			if (1 != EVP_DigestInit_ex(ctx, EVP_md5(), NULL))
 				goto fail;
 			break;
 	}
@@ -253,6 +257,8 @@ plx_get_file_digest(gchar **digest, gchar *filename)
 	*digest = calloc(PLX_ALIGN_SIZE(plx_get_digest_size_binary(plx_ctx.digest_type)+1), 1);
 	if (1 != EVP_DigestFinal_ex(ctx, *digest, &len))
 		goto fail;
+
+	(*digest)[len] = 0;
 
 	close(fd);
 	EVP_MD_CTX_destroy(ctx);
@@ -325,8 +331,8 @@ __insert_file_node(gchar *path, gsize size)
 		return 0;
 	}
 
-	struct file_node *nptr = root;
 	gchar *current_digest = NULL;
+	struct file_node *nptr = root;
 
 	while (1)
 	{
@@ -484,12 +490,24 @@ plx_destroy_tree(struct file_node *node)
 		plx_destroy_tree(node->right);
 
 	free(node->path);
+	node->path = NULL;
+
 	if (node->bucket)
+	{
 		free(node->bucket);
+		node->bucket = NULL;
+	}
+
 	if (node->digest)
+	{
 		free(node->digest);
+		node->digest = NULL;
+	}
+
+	node->size = 0;
 
 	free(node);
+	node = NULL;
 	return;
 }
 
@@ -572,7 +590,7 @@ plx_show_duplicate_files(struct pollux_ctx *ctx)
 
 	window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
 	gtk_window_set_title(GTK_WINDOW(window), "Duplicate Files");
-	gtk_window_set_default_size(GTK_WINDOW(window), 1500, 350);
+	//gtk_window_set_default_size(GTK_WINDOW(window), 1500, 350);
 
 	view = gtk_tree_view_new();
 	renderer = gtk_cell_renderer_text_new();
@@ -588,6 +606,7 @@ plx_show_duplicate_files(struct pollux_ctx *ctx)
 	gtk_box_set_homogeneous(GTK_BOX(stats_box), TRUE);
 
 	gchar tmp[32];
+
 	GtkWidget *label_nr_files = gtk_label_new("Files scanned: ");
 	gtk_box_pack_start(GTK_BOX(stats_box), label_nr_files, FALSE, FALSE, 0);
 	sprintf(tmp, "%d", plx_ctx.nr_files);
@@ -600,17 +619,66 @@ plx_show_duplicate_files(struct pollux_ctx *ctx)
 	gtk_box_pack_start(GTK_BOX(stats_box), stats_nr_duplicates, FALSE, FALSE, 0);
 	GtkWidget *label_wasted_mem = gtk_label_new("Wasted Mem: ");
 	gtk_box_pack_start(GTK_BOX(stats_box), label_wasted_mem, FALSE, FALSE, 0);
-	sprintf(tmp, "%d", plx_ctx.wasted_mem);
+	sprintf(tmp, "%d B", plx_ctx.wasted_mem);
 	GtkWidget *stats_wasted_mem = gtk_label_new(tmp);
 	gtk_box_pack_start(GTK_BOX(stats_box), stats_wasted_mem, FALSE, FALSE, 0);
 
 	GtkWidget *grid = gtk_grid_new();
 
 	gtk_grid_attach(GTK_GRID(grid), stats_box, 0, 0, 1, 1);
-	gtk_grid_attach(GTK_GRID(grid), view, 0, 1, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), view, 0, 2, 1, 1);
 	gtk_container_add(GTK_CONTAINER(window), grid);
 
+	plx_destroy_tree(root);
 	gtk_widget_show_all(window);
+
+	return;
+}
+
+static gchar *home = NULL;
+static gchar *path_buf = NULL;
+static gchar home_dir[PATH_MAX];
+
+static void
+__attribute__((constructor)) __plx_init(void)
+{
+	gint i;
+
+	home = getenv("HOME");
+	if (!home)
+	{
+		g_error("Failed to get HOME directory\n");
+		goto fail;
+	}
+
+	path_buf = calloc(PLX_ALIGN_SIZE(PATH_MAX*2), 1);
+	if (!path_buf)
+	{
+		g_error("Failed to allocate memory for PATH_BUF\n");
+		goto fail;
+	}
+
+	strcpy(home_dir, home);
+	strcpy(path_buf, home_dir);
+	strcat(path_buf, "/Documents");
+
+	plx_ctx.gui.digests = hash_digests;
+	plx_ctx.digest_type = DIGEST_MD5;
+
+	return;
+
+	fail:
+	exit(EXIT_FAILURE);
+}
+
+static void
+__attribute__((destructor)) __plx_fini(void)
+{
+	if (path_buf)
+	{
+		free(path_buf);
+		path_buf = NULL;
+	}
 
 	return;
 }
@@ -618,27 +686,10 @@ plx_show_duplicate_files(struct pollux_ctx *ctx)
 void
 on_start_scan(GtkWidget *widget, gpointer data)
 {
-	gchar *home = getenv("HOME");
-
-	if (!home)
-	{
-		g_print("*** Failed to get home directory! ***\n");
-		goto fail;
-	}
-
-	strcpy(home_dir, home);
-
-	path_buf = calloc(PLX_ALIGN_SIZE(PATHMAX*2), 1);
-	strcpy(path_buf, home_dir);
-	strcat(path_buf, "/Documents");
-
 	if (__do_scan(path_buf) == -1)
 		goto fail;
 
 	plx_show_duplicate_files(&plx_ctx);
-
-	plx_destroy_tree(root);
-	free(path_buf);
 
 	return;
 
@@ -657,15 +708,24 @@ enum
 static void
 on_digest_select(GtkWidget *widget, gpointer type)
 {
-	if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget)))
+	struct digest_opt *digests = plx_ctx.gui.digests;
+	gint i;
+
+	for (i = 0; i < NR_DIGESTS; ++i)
 	{
-		plx_ctx.digest_type = *(gint *)type;
-		g_print("Using digest #%d\n", plx_ctx.digest_type);
+		if (digests[i].menu_item == widget)
+			continue;
+
+		gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(digests[i].menu_item), FALSE);
 	}
+
+	plx_ctx.digest_type = *(gint *)type;
+	g_print("Using digest #%d\n", plx_ctx.digest_type);
 
 	return;
 }
 
+#if 0
 static void
 on_show_folders(GtkWidget *widget, gpointer data)
 {
@@ -746,6 +806,7 @@ on_show_folders(GtkWidget *widget, gpointer data)
 
 	return;
 }
+#endif
 
 static void
 set_application_icon(GtkWidget *window)
@@ -769,12 +830,87 @@ set_application_icon(GtkWidget *window)
 }
 
 static void
+window_add_menus(struct pollux_ctx *ctx)
+{
+	GtkWidget *menu_bar;
+	GtkWidget *grid = ctx->gui.grid;
+	gint i;
+
+/* File menu */
+	GtkWidget *mbi_file;
+	GtkWidget *file_menu;
+	GtkWidget *f_quit;
+
+/* Options menu */
+	GtkWidget *mbi_options;
+	GtkWidget *options_menu;
+
+/* Options digests submenu */
+	GtkWidget *digests_menu;
+	GtkWidget *smi_digests;
+	//GtkWidget *o_md5;
+	//GtkWidget *o_sha256;
+	//GtkWidget *o_sha512;
+	GtkWidget *sm_digests_box;
+
+	menu_bar = gtk_menu_bar_new();
+
+	file_menu = gtk_menu_new();
+	mbi_file = gtk_menu_item_new_with_label("File");
+	options_menu = gtk_menu_new();
+	mbi_options = gtk_menu_item_new_with_label("Options");
+	digests_menu = gtk_menu_new();
+	smi_digests = gtk_menu_item_new_with_label("Digests");
+
+	f_quit = gtk_menu_item_new_with_label("Quit");
+	gtk_menu_item_set_submenu(GTK_MENU_ITEM(mbi_file), file_menu);
+	gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), f_quit);
+
+
+/*
+ * [Options]
+ * [digests>
+ *          [MD5
+ *          [SHA256
+ *          [SHA512
+ */
+	gtk_menu_item_set_submenu(GTK_MENU_ITEM(mbi_options), options_menu);
+	gtk_menu_shell_append(GTK_MENU_SHELL(options_menu), smi_digests);
+	gtk_menu_item_set_submenu(GTK_MENU_ITEM(smi_digests), digests_menu);
+
+	for (i = 0; i < NR_DIGESTS; ++i)
+	{
+		hash_digests[i].menu_item = gtk_check_menu_item_new_with_label(hash_digests[i].name);
+
+/*
+ * Set MD5 as default.
+ */
+		if (hash_digests[i].type == DIGEST_MD5)
+			gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(hash_digests[i].menu_item), TRUE);
+
+		g_signal_connect(G_OBJECT(hash_digests[i].menu_item), "toggled", G_CALLBACK(on_digest_select), (gpointer)&hash_digests[i].type);
+		gtk_menu_shell_append(GTK_MENU_SHELL(digests_menu), hash_digests[i].menu_item);
+	}
+
+	gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), mbi_file);
+	gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), mbi_options);
+
+	//box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
+	//gtk_box_pack_start(GTK_BOX(box), menu_bar, FALSE, FALSE, 0);
+
+	gtk_grid_attach(GTK_GRID(grid), menu_bar, 0, 0, 1, 1);
+	//gtk_container_add(GTK_CONTAINER(widget), box);
+
+	return;
+}
+
+static void
 setup_window(GtkApplication *app, gpointer data)
 {
 	// the window will be cast using the macro GTK_WINDOW()
-	GtkWidget		*window = NULL;
+	GtkWidget *window = NULL;
 	//the grid will be cast using the macro GTK_GRID()
-	GtkWidget		*grid_left = NULL;
+	GtkWidget *grid = NULL;
 	//GtkListStore *list_store;
 	//GtkWidget *tree_view;
 	//GtkTreeIter iter;
@@ -784,10 +920,7 @@ setup_window(GtkApplication *app, gpointer data)
 	GtkWidget *runtime_opts_label;
 	GtkWidget *check_opt_nodelete;
 	GtkWidget *check_opt_nohidden;
-	GtkWidget *box2;
 	GtkWidget *btn_scan;
-	GtkWidget *btn_show_folders;
-	GtkWidget *btn_quit;
 	gint i;
 	
 	// set up the window
@@ -799,57 +932,34 @@ setup_window(GtkApplication *app, gpointer data)
 	gtk_container_set_border_width(GTK_CONTAINER(window), 50);
 
 	// get a grid container and add it to the window
-	grid_left = gtk_grid_new();
-	gtk_container_add(GTK_CONTAINER(window), grid_left);
+	grid = gtk_grid_new();
+	gtk_container_add(GTK_CONTAINER(window), grid);
 
-	btn_quit = gtk_button_new_with_label("Quit");
+	plx_ctx.gui.window = window;
+	plx_ctx.gui.grid = grid;
+
+	window_add_menus(&plx_ctx);
+
 /*
  * If you use just g_signal_connect() to do this, then the actual button widget
  * would be destroyed, not the window!
  */
-	g_signal_connect_swapped(btn_quit, "clicked", G_CALLBACK(gtk_widget_destroy), window);
+	//g_signal_connect_swapped(btn_quit, "clicked", G_CALLBACK(gtk_widget_destroy), window);
 
 	set_application_icon(window);
 
-/*
- * Create radio buttons for user to select the hash digest algorithm
- * they wish to use in order to compare files with one another.
- */
-	digest_opts_label = gtk_label_new("Digest:");
-
-	radio_digest_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, NR_DIGESTS);
-	gtk_box_set_homogeneous(GTK_BOX(radio_digest_box), TRUE);
-
-	hash_digests[0].radio = gtk_radio_button_new_with_label(NULL, hash_digests[0].name);
-	g_signal_connect(hash_digests[0].radio, "toggled", G_CALLBACK(hash_digests[0].set_digest_func), (gpointer)&hash_digests[0].type);
-	gtk_box_pack_start(GTK_BOX(radio_digest_box), hash_digests[0].radio, FALSE, FALSE, 0);
-
-	for (i = 1; i < NR_DIGESTS; ++i)
-	{
-		hash_digests[i].radio = gtk_radio_button_new_with_label_from_widget(GTK_RADIO_BUTTON(hash_digests[0].radio), hash_digests[i].name);
-		g_signal_connect(hash_digests[i].radio, "clicked", G_CALLBACK(hash_digests[i].set_digest_func), (gpointer)&hash_digests[i].type);
-		gtk_box_pack_start(GTK_BOX(radio_digest_box), hash_digests[i].radio, FALSE, FALSE, 0);
-	}
-
-	btn_scan = gtk_button_new_with_label("Start Scan");
-	btn_show_folders = gtk_button_new_with_label("Show Folders");
-
+	btn_scan = gtk_button_new_with_label("Scan");
 	g_signal_connect(btn_scan, "clicked", G_CALLBACK(on_start_scan), NULL);
-	g_signal_connect(btn_show_folders, "clicked", G_CALLBACK(on_show_folders), NULL);
 
 	// gtk_grid_attach(GtkGrid *, GtkWidget *, gint left, gint top, gint width, gint height)
-	gtk_grid_attach(GTK_GRID(grid_left), digest_opts_label, 0, 1, 1, 1);
-	gtk_grid_attach(GTK_GRID(grid_left), radio_digest_box, 1, 1, 1, 1);
-	gtk_grid_attach(GTK_GRID(grid_left), btn_quit, 0, 2, 1, 1);
-	gtk_grid_attach(GTK_GRID(grid_left), btn_scan, 0, 3, 1, 1);
-	gtk_grid_attach(GTK_GRID(grid_left), btn_show_folders, 0, 4, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), btn_scan, 0, 2, 2, 2);
 
 	GtkWidget *info = gtk_label_new(
 		"\tPollux v" APPLICATION_BUILD"\n"
 		"\n"
 		"\tWritten by Gary Hannah");
 
-	gtk_grid_attach(GTK_GRID(grid_left), info, 3, 1, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), info, 3, 1, 1, 1);
 
 	gtk_widget_show_all(window);
 }
