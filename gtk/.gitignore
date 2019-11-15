@@ -1,1 +1,5 @@
 pollux-gui
+*.txt
+*.o
+.*
+!.gitignore
