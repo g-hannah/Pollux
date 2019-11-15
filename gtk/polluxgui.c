@@ -106,7 +106,6 @@ struct pollux_ctx
 	guint nr_duplicates;
 	guint nr_files;
 	guint wasted_mem;
-	struct file_node *root;
 	gint scanning;
 
 	struct
@@ -138,7 +137,7 @@ struct pollux_ctx
 };
 
 struct pollux_ctx plx_ctx = {0};
-struct file_node *root;
+struct file_node *root = NULL;
 
 static void
 plx_dup_digest(gchar **target, gchar *digest, gsize size)
