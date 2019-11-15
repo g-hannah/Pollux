@@ -16,8 +16,8 @@
 #define APPLICATION_BUILD "2.0.4"
 #define MAIN_WINDOW_DEFAULT_WIDTH 1000
 #define MAIN_WINDOW_DEFAULT_HEIGHT 350
-#define APPLICATION_ICON_LARGE_PATH "/home/oppa/pollux_logo.svg"
-#define APPLICATION_ICON_SMALL_PATH "/home/oppa/pollux_logo_small.svg"
+#define APPLICATION_ICON_LARGE_PATH "/gtk/icons/pollux_logo.svg"
+#define APPLICATION_ICON_SMALL_PATH "/gtk/icons/pollux_logo_small.svg"
 
 #define DIGEST_ASCII_MAX_SIZE (EVP_MAX_MD_SIZE * 2)
 #define FILE_NODE_COOKIE 0xdeadbeefu
