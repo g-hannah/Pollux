@@ -20,6 +20,7 @@
 #define APPLICATION_ICON_SMALL_PATH "/home/oppa/pollux_logo_small.svg"
 
 #define DIGEST_ASCII_MAX_SIZE (EVP_MAX_MD_SIZE * 2)
+#define FILE_NODE_COOKIE 0xdeadbeefu
 
 #ifndef PATHMAX
 # define PATHMAX 1024
@@ -88,6 +89,7 @@ struct file_node
 {
 	gchar *path;
 	gsize size;
+	guint cookie;
 	gchar *digest;
 	struct file_node *left;
 	struct file_node *right;
@@ -113,15 +115,15 @@ struct pollux_ctx
 		gint no_hidden;
 	} options;
 
+#define digest_type options.digest_type
+#define no_hidden options.no_hidden
+
 	struct
 	{
 		GtkWidget *window;
 		GtkWidget *grid;
 		struct digest_opt *digests;
 	} gui;
-
-#define digest_type options.digest_type
-#define no_hidden options.no_hidden
 
 /*
  * Do not keep an ITER arg here because tree
@@ -141,6 +143,9 @@ struct file_node *root;
 static void
 plx_dup_digest(gchar **target, gchar *digest, gsize size)
 {
+	assert(target);
+	assert(digest);
+
 	(*target) = calloc(PLX_ALIGN_SIZE(size), 1);
 	memcpy((*target), digest, size);
 	(*target)[size] = 0;
@@ -153,6 +158,9 @@ const char const hexchars[16] = "0123456789abcdef";
 static void
 plx_get_digest_ascii(gchar *ascii, gchar *binary, gsize size)
 {
+	assert(ascii);
+	assert(binary);
+
 	gint i;
 	gint k;
 
@@ -224,14 +232,17 @@ plx_get_file_digest(gchar **digest, gchar *filename)
 	switch(plx_ctx.digest_type)
 	{
 		case DIGEST_SHA256:
+			g_print("using sha256\n");
 			if (1 != EVP_DigestInit_ex(ctx, EVP_sha256(), NULL))
 				goto fail;
 			break;
 		case DIGEST_SHA512:
+			g_print("using sha512\n");
 			if (1 != EVP_DigestInit_ex(ctx, EVP_sha512(), NULL))
 				goto fail;
 			break;
 		default:
+			g_print("using md5\n");
 			if (1 != EVP_DigestInit_ex(ctx, EVP_md5(), NULL))
 				goto fail;
 			break;
@@ -255,11 +266,13 @@ plx_get_file_digest(gchar **digest, gchar *filename)
 		toread -= bytes;
 	}
 
-	*digest = calloc(PLX_ALIGN_SIZE(plx_get_digest_size_binary(plx_ctx.digest_type)+1), 1);
-	if (1 != EVP_DigestFinal_ex(ctx, (unsigned char *)*digest, &len))
+	*digest = calloc(PLX_ALIGN_SIZE(plx_get_digest_size_binary(plx_ctx.digest_type)+17), 1);
+	if (1 != EVP_DigestFinal_ex(ctx, (unsigned char *)(*digest), &len))
 		goto fail;
 
-	(*digest)[len] = 0;
+	g_assert(len == plx_get_digest_size_binary(plx_ctx.digest_type));
+
+	//(*digest)[len] = 0;
 
 	close(fd);
 	EVP_MD_CTX_destroy(ctx);
@@ -300,7 +313,6 @@ plx_digest_name_str(gint type)
 	return NULL;
 }
 
-#if 0
 static void
 plx_print_digest(gchar *digest)
 {
@@ -311,7 +323,6 @@ plx_print_digest(gchar *digest)
 
 	return;
 }
-#endif
 
 static gint
 __insert_file_node(gchar *path, gsize size)
@@ -327,12 +338,20 @@ __insert_file_node(gchar *path, gsize size)
 		root->bucket = NULL;
 		root->digest = NULL;
 
+		root->cookie = FILE_NODE_COOKIE;
+
 		root->path = strdup(path);
 		assert(root->path);
 		root->size = size;
 
 		return 0;
 	}
+
+	g_assert(root);
+	g_assert(root->cookie == FILE_NODE_COOKIE);
+
+	if (root->left && root->right)
+		g_assert(root->left != root->right);
 
 	gchar *current_digest = NULL;
 	struct file_node *nptr = root;
@@ -350,6 +369,8 @@ __insert_file_node(gchar *path, gsize size)
 				nptr->left->right = NULL;
 				nptr->left->bucket = NULL;
 				nptr->left->digest = NULL;
+
+				nptr->left->cookie = FILE_NODE_COOKIE;
 
 				nptr->left->path = strdup(path);
 				assert(nptr->left->path);
@@ -376,6 +397,8 @@ __insert_file_node(gchar *path, gsize size)
 				nptr->right->bucket = NULL;
 				nptr->right->digest = NULL;
 
+				nptr->right->cookie = FILE_NODE_COOKIE;
+
 				nptr->right->path = strdup(path);
 				assert(nptr->right->path);
 				nptr->right->size = size;
@@ -397,9 +420,15 @@ __insert_file_node(gchar *path, gsize size)
 			gsize digest_size = plx_get_digest_size_binary(plx_ctx.digest_type);
 
 			if (!nptr->digest)
+			{
 				plx_get_file_digest(&nptr->digest, nptr->path);
+				g_assert(nptr->cookie == FILE_NODE_COOKIE);
+			}
 
 			plx_get_file_digest(&current_digest, path);
+
+			plx_print_digest(current_digest);
+			plx_print_digest(nptr->digest);
 
 			if (!memcmp(current_digest, nptr->digest, digest_size))
 			{
@@ -490,33 +519,33 @@ __insert_file_node(gchar *path, gsize size)
 }
 
 static void
-plx_destroy_tree(struct file_node *node)
+plx_destroy_tree(struct file_node **node)
 {
-	if (node->left)
-		plx_destroy_tree(node->left);
+	if ((*node)->left)
+		plx_destroy_tree(&(*node)->left);
 
-	if (node->right)
-		plx_destroy_tree(node->right);
+	if ((*node)->right)
+		plx_destroy_tree(&(*node)->right);
 
-	free(node->path);
-	node->path = NULL;
+	free((*node)->path);
+	(*node)->path = NULL;
 
-	if (node->bucket)
+	if ((*node)->bucket)
 	{
-		free(node->bucket);
-		node->bucket = NULL;
+		free((*node)->bucket);
+		(*node)->bucket = NULL;
 	}
 
-	if (node->digest)
+	if ((*node)->digest)
 	{
-		free(node->digest);
-		node->digest = NULL;
+		free((*node)->digest);
+		(*node)->digest = NULL;
 	}
 
-	node->size = 0;
+	(*node)->size = 0;
 
-	free(node);
-	node = NULL;
+	free(*node);
+	*node = NULL;
 	return;
 }
 
@@ -541,7 +570,10 @@ __do_scan(gchar *path)
 
 	dirp = opendir(path);
 	if (!dirp)
+	{
+		g_print("failed to open directory %s\n", path);
 		return -1;
+	}
 
 	clear_struct(&statb);
 
@@ -581,6 +613,7 @@ __do_scan(gchar *path)
 	return 0;
 
 	fail:
+	g_print("returning -1\n");
 	if (dirp)
 		closedir(dirp);
 	*p = 0;
@@ -638,7 +671,7 @@ plx_show_duplicate_files(struct pollux_ctx *ctx)
 	gtk_grid_attach(GTK_GRID(grid), view, 0, 2, 1, 1);
 	gtk_container_add(GTK_CONTAINER(window), grid);
 
-	plx_destroy_tree(root);
+	plx_destroy_tree(&root);
 	gtk_widget_show_all(window);
 
 	return;
@@ -658,6 +691,8 @@ __attribute__((constructor)) __plx_init(void)
 		goto fail;
 	}
 
+	strcpy(home_dir, home);
+
 	path_buf = calloc(PLX_ALIGN_SIZE(PATH_MAX*2), 1);
 	if (!path_buf)
 	{
@@ -665,6 +700,7 @@ __attribute__((constructor)) __plx_init(void)
 		goto fail;
 	}
 
+	plx_ctx.scanning = 0;
 	plx_ctx.gui.digests = hash_digests;
 	plx_ctx.digest_type = DIGEST_MD5;
 
@@ -689,8 +725,12 @@ __attribute__((destructor)) __plx_fini(void)
 void
 on_start_scan(GtkWidget *widget, gpointer data)
 {
+	g_print("starting scan\n");
 	if (plx_ctx.scanning)
+	{
+		g_error("already scanning\n");
 		return;
+	}
 
 	plx_ctx.scanning = 1;
 	path_buf[0] = 0;
@@ -698,16 +738,28 @@ on_start_scan(GtkWidget *widget, gpointer data)
 	strcpy(path_buf, home_dir);
 	strcat(path_buf, "/Documents");
 
+	g_print("starting scan in %s\n", path_buf);
 	if (__do_scan(path_buf) == -1)
 		goto fail;
 
 	plx_show_duplicate_files(&plx_ctx);
 	plx_ctx.scanning = 0;
 
+	plx_ctx.nr_files = 0;
+	plx_ctx.nr_duplicates = 0;
+	plx_ctx.wasted_mem = 0;
+
+	g_object_unref(G_OBJECT(plx_ctx.tree.view));
+	plx_ctx.tree.initialised = 0;
+
 	return;
 
 	fail:
-	return;
+	{
+		g_error("scan failed\n");
+		plx_ctx.scanning = 0;
+		return;
+	}
 }
 
 enum
