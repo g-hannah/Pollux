@@ -105,6 +105,7 @@ struct pollux_ctx
 	guint nr_files;
 	guint wasted_mem;
 	struct file_node *root;
+	gint scanning;
 
 	struct
 	{
@@ -255,7 +256,7 @@ plx_get_file_digest(gchar **digest, gchar *filename)
 	}
 
 	*digest = calloc(PLX_ALIGN_SIZE(plx_get_digest_size_binary(plx_ctx.digest_type)+1), 1);
-	if (1 != EVP_DigestFinal_ex(ctx, *digest, &len))
+	if (1 != EVP_DigestFinal_ex(ctx, (unsigned char *)*digest, &len))
 		goto fail;
 
 	(*digest)[len] = 0;
@@ -299,6 +300,7 @@ plx_digest_name_str(gint type)
 	return NULL;
 }
 
+#if 0
 static void
 plx_print_digest(gchar *digest)
 {
@@ -309,6 +311,7 @@ plx_print_digest(gchar *digest)
 
 	return;
 }
+#endif
 
 static gint
 __insert_file_node(gchar *path, gsize size)
@@ -418,8 +421,11 @@ __insert_file_node(gchar *path, gsize size)
 					nptr->bucket = calloc(nptr->nr_bucket, PLX_ALIGN_SIZE(digest_size + 1));
 
 					nptr->bucket[nptr->nr_bucket - 1].digest = calloc(PLX_ALIGN_SIZE(digest_size + 1), 1);
+					plx_dup_digest(&nptr->bucket[nptr->nr_bucket - 1].digest, current_digest, digest_size);
+#if 0
 					memcpy(nptr->bucket[nptr->nr_bucket - 1].digest, current_digest, digest_size);
 					nptr->bucket[nptr->nr_bucket - 1].digest[digest_size] = 0;
+#endif
 					nptr->bucket[nptr->nr_bucket - 1].path = strdup(path);
 					nptr->bucket[nptr->nr_bucket - 1].size = size;
 				}
@@ -461,8 +467,11 @@ __insert_file_node(gchar *path, gsize size)
 						nptr->bucket = realloc(nptr->bucket, PLX_ALIGN_SIZE((nptr->nr_bucket * sizeof(struct file_node))));
 
 						nptr->bucket[nptr->nr_bucket - 1].digest = calloc(PLX_ALIGN_SIZE(digest_size+1), 1);
+						plx_dup_digest(&nptr->bucket[nptr->nr_bucket - 1].digest, current_digest, digest_size);
+#if 0
 						memcpy(nptr->bucket[nptr->nr_bucket - 1].digest, current_digest, digest_size);
 						nptr->bucket[nptr->nr_bucket - 1].digest[digest_size] = 0;
+#endif
 						nptr->bucket[nptr->nr_bucket - 1].path = strdup(path);
 						nptr->bucket[nptr->nr_bucket - 1].size = size;
 					}
@@ -642,8 +651,6 @@ static gchar home_dir[PATH_MAX];
 static void
 __attribute__((constructor)) __plx_init(void)
 {
-	gint i;
-
 	home = getenv("HOME");
 	if (!home)
 	{
@@ -657,10 +664,6 @@ __attribute__((constructor)) __plx_init(void)
 		g_error("Failed to allocate memory for PATH_BUF\n");
 		goto fail;
 	}
-
-	strcpy(home_dir, home);
-	strcpy(path_buf, home_dir);
-	strcat(path_buf, "/Documents");
 
 	plx_ctx.gui.digests = hash_digests;
 	plx_ctx.digest_type = DIGEST_MD5;
@@ -686,10 +689,20 @@ __attribute__((destructor)) __plx_fini(void)
 void
 on_start_scan(GtkWidget *widget, gpointer data)
 {
+	if (plx_ctx.scanning)
+		return;
+
+	plx_ctx.scanning = 1;
+	path_buf[0] = 0;
+
+	strcpy(path_buf, home_dir);
+	strcat(path_buf, "/Documents");
+
 	if (__do_scan(path_buf) == -1)
 		goto fail;
 
 	plx_show_duplicate_files(&plx_ctx);
+	plx_ctx.scanning = 0;
 
 	return;
 
@@ -848,24 +861,19 @@ window_add_menus(struct pollux_ctx *ctx)
 /* Options digests submenu */
 	GtkWidget *digests_menu;
 	GtkWidget *smi_digests;
-	//GtkWidget *o_md5;
-	//GtkWidget *o_sha256;
-	//GtkWidget *o_sha512;
-	GtkWidget *sm_digests_box;
 
 	menu_bar = gtk_menu_bar_new();
-
 	file_menu = gtk_menu_new();
-	mbi_file = gtk_menu_item_new_with_label("File");
 	options_menu = gtk_menu_new();
-	mbi_options = gtk_menu_item_new_with_label("Options");
 	digests_menu = gtk_menu_new();
-	smi_digests = gtk_menu_item_new_with_label("Digests");
 
-	f_quit = gtk_menu_item_new_with_label("Quit");
+	mbi_file = gtk_menu_item_new_with_label("File");
 	gtk_menu_item_set_submenu(GTK_MENU_ITEM(mbi_file), file_menu);
+	f_quit = gtk_menu_item_new_with_label("Quit");
 	gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), f_quit);
 
+	mbi_options = gtk_menu_item_new_with_label("Options");
+	smi_digests = gtk_menu_item_new_with_label("Digests");
 
 /*
  * [Options]
@@ -915,13 +923,7 @@ setup_window(GtkApplication *app, gpointer data)
 	//GtkWidget *tree_view;
 	//GtkTreeIter iter;
 	//GtkCellRenderer *renderer;
-	GtkWidget *digest_opts_label;
-	GtkWidget *radio_digest_box;
-	GtkWidget *runtime_opts_label;
-	GtkWidget *check_opt_nodelete;
-	GtkWidget *check_opt_nohidden;
 	GtkWidget *btn_scan;
-	gint i;
 	
 	// set up the window
 	window = gtk_application_window_new(app);
