@@ -7,6 +7,8 @@
 #include <map>
 #include <gtk/gtk.h>
 
+#define PROG_NAME "Pollux"
+
 enum
 {
 	DIGEST_MD5,
