@@ -109,6 +109,7 @@ struct dup_list
 	gchar *digest;
 	struct dup_node *head;
 	struct dup_node *tail;
+	gsize nr_nodes;
 	void (*insert_dnode)(struct dup_list *, struct dup_node *, gchar *);
 };
 
@@ -138,36 +139,56 @@ insert_dnode(struct file_tree *tree, struct dup_node *node, gchar *digest)
 {
 	assert(tree);
 
+	gsize dsize = plx_get_digest_size_binary(plx_ctx.digest_type);
+	struct dup_list *list;
+
 	if (!tree->dup_list)
 	{
-		tree->dup_list = calloc(1, sizeof(struct dup_node));
+		tree->dup_list = malloc(sizeof(struct dup_list));
 		tree->list_size = 1;
+
+		list = &tree->dup_list[0];
+		list->head = node;
+		list->tail = node;
+		node->prev = NULL;
+		list->nr_nodes = 1;
+
+		return;
 	}
 
-	if ((idx = __get_hash_idx(tree->dup_list, digest)) == -1)
+/*
+ * Terrible (O(N)), but for the time-being until I can be bothered
+ * creating a hash bucket implementation, this is what will be
+ * used.
+ */
+	if ((idx = __get_hash_idx(tree->dup_list, tree->list_size, digest, dsize)) == -1)
 	{
-		tree->list_size += 1;
+		++tree->list_size;
 		tree->dup_list = realloc(tree->dup_list, (tree->list_size * sizeof(struct dup_node)));
 		assert(tree->dup_list);
+
+		list = &tree->dup_list[tree->list_size - 1];
 	}
 	else
 	{
-		struct dup_list *list = &tree->dup_list[idx];
-
-		if (!list->head)
-		{
-			list->head = node;
-			list->tail = node;
-		}
-		else
-		{
-			list->tail->next = node;
-			node->prev = list->tail;
-			list->tail = node;
-		}
+		list = &tree->dup_list[idx];
 	}
 
-	int idx = __get_hash_idx(tree->dup_list, digest);
+	if (!list->head)
+	{
+		list->head = node;
+		list->tail = node;
+	}
+	else
+	{
+		list->tail->next = node;
+		node->prev = list->tail;
+		list->tail = node;
+	}
+
+	++list->nr_nodes;
+
+	return;
 }
 
 #define PLX_INC_FILES(p) ++((p)->nr_files)
@@ -803,18 +824,31 @@ __attribute__((destructor)) __plx_fini(void)
 
 	if (plx_ctx._tree)
 	{
-		struct dup_node *node = plx_ctx._tree->head;
-		struct dup_node *prev;
-
-		while (node)
+		if (plx_ctx._tree->dup_list)
 		{
-			prev = node;
-			node = node->next;
-			free(prev);
-		}
+			gint nr = plx_ctx._tree->list_size;
+			gint i;
+			struct dup_list *list;
+			struct dup_node *node;
+			struct dup_node *prev;
 
-		if (plx_ctx._tree->digest)
-			free(plx_ctx._tree->digest);
+			for (i = 0; i < nr; ++i)
+			{
+				list = &plx_ctx._tree->dup_list[i];
+
+				if (list->digest)
+					free(list->digest);
+
+				node = list->head;
+
+				while (node)
+				{
+					prev = node;
+					node = node->next;
+					free(prev);
+				}
+			}
+		}
 	}
 
 	return;
