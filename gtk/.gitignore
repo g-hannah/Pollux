@@ -3,3 +3,4 @@ pollux-gui
 *.o
 .*
 !.gitignore
+a.out
