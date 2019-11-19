@@ -104,6 +104,7 @@ class fTree
 	gsize nr_nodes;
 
 	fTree();
+	~fTree();
 
 	void insert_file(gchar *name)
 	{
@@ -210,75 +211,6 @@ class fTree
 		}
 	}
 
-	void destroy_all(void)
-	{
-		std::list<dList>::iterator it = this->dup_list.begin();
-
-		for (; it != this->dup_list.end(); ++it)
-		{
-			if (it->digest)
-				free(it->digest);
-
-			std::list<dNode>::iterator _it = it->files.begin();
-
-			for (; _it != it->files.end(); ++_it)
-			{
-				if (_it->name)
-					free(_it->name);
-			}
-
-			_it->files.clear();
-		}
-
-		this->dup_list.clear();
-
-		if (this->root)
-		{
-			fNode *node = this->root;
-			fNode *parent = NULL;
-
-			while (true)
-			{
-				if (!node->left && !node->right)
-				{
-					parent = node->parent;
-
-					if (parent)
-					{
-						if (parent->left == node)
-							parent->left = NULL;
-						else
-							parent->right = NULL;
-					}
-
-					free(node);
-
-					if (!parent)
-						break;
-
-					node = parent;
-
-					continue;
-				}
-
-				if (node->left)
-				{
-					while (node->left)
-					{
-						node = node->left;
-					}
-				}
-
-				if (node->right)
-				{
-					node = node->right;
-				}
-			}
-		} /* if this->root */
-
-		this->hash_idx_map.clear();
-	}
-
 	private:
 
 	void add_dup_file(gchar *name, gchar *digest)
@@ -335,6 +267,75 @@ fTree::fTree(void)
 {
 	this->nr_nodes = 0;
 	this->root = NULL;
+}
+
+fTree::~fTree(void)
+{
+	std::list<dList>::iterator it = this->dup_list.begin();
+
+	for (; it != this->dup_list.end(); ++it)
+	{
+		if (it->digest)
+			free(it->digest);
+
+		std::list<dNode>::iterator _it = it->files.begin();
+
+		for (; _it != it->files.end(); ++_it)
+		{
+			if (_it->name)
+				free(_it->name);
+		}
+
+		_it->files.clear();
+	}
+
+	this->dup_list.clear();
+
+	if (this->root)
+	{
+		fNode *node = this->root;
+		fNode *parent = NULL;
+
+		while (true)
+		{
+			if (!node->left && !node->right)
+			{
+				parent = node->parent;
+
+				if (parent)
+				{
+					if (parent->left == node)
+						parent->left = NULL;
+					else
+						parent->right = NULL;
+				}
+
+				free(node);
+
+				if (!parent)
+					break;
+
+				node = parent;
+
+				continue;
+			}
+
+			if (node->left)
+			{
+				while (node->left)
+				{
+					node = node->left;
+				}
+			}
+
+			if (node->right)
+			{
+				node = node->right;
+			}
+		}
+	} /* if this->root */
+
+	this->hash_idx_map.clear();
 }
 
 struct plx_ctx
