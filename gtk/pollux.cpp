@@ -1,6 +1,8 @@
 #include <assert.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <iostream>
 #include <list>
@@ -17,26 +19,12 @@ enum
 	NR_DIGESTS
 };
 
-struct plx_ctx
-{
-	gint digest_type;
-	fTree *tree;
-};
+struct plx_ctx;
 
 static struct plx_ctx plx_ctx;
 static gsize get_digest_size_hex(gint type);
 
-static void release_mem(void)
-{
-	fTree *tree = plx_ctx.tree;
-
-	if (tree)
-		tree->destroy_all();
-
-	return;
-}
-
-class fNode:
+class fNode
 {
 	gchar *digest;
 	gchar *name;
@@ -68,7 +56,7 @@ fNode::fNode(void)
 /*
  * Duplicate file node.
  */
-class dNode:
+class dNode
 {
 	public:
 
@@ -91,7 +79,7 @@ dNode::dNode(void)
  * a head pointer to linked list of
  * all the files that have this digest.
  */
-class dList:
+class dList
 {
 	public:
 
@@ -109,7 +97,7 @@ dList::dList(void)
 	this->head = NULL;
 }
 
-class fTree:
+class fTree
 {
 	public:
 
@@ -222,6 +210,75 @@ class fTree:
 		}
 	}
 
+	void destroy_all(void)
+	{
+		std::list<dList>::iterator it = this->dup_list.begin();
+
+		for (; it != this->dup_list.end(); ++it)
+		{
+			if (it->digest)
+				free(it->digest);
+
+			std::list<dNode>::iterator _it = it->files.begin();
+
+			for (; _it != it->files.end(); ++_it)
+			{
+				if (_it->name)
+					free(_it->name);
+			}
+
+			_it->files.clear();
+		}
+
+		this->dup_list.clear();
+
+		if (this->root)
+		{
+			fNode *node = this->root;
+			fNode *parent = NULL;
+
+			while (true)
+			{
+				if (!node->left && !node->right)
+				{
+					parent = node->parent;
+
+					if (parent)
+					{
+						if (parent->left == node)
+							parent->left = NULL;
+						else
+							parent->right = NULL;
+					}
+
+					free(node);
+
+					if (!parent)
+						break;
+
+					node = parent;
+
+					continue;
+				}
+
+				if (node->left)
+				{
+					while (node->left)
+					{
+						node = node->left;
+					}
+				}
+
+				if (node->right)
+				{
+					node = node->right;
+				}
+			}
+		} /* if this->root */
+
+		this->hash_idx_map.clear();
+	}
+
 	private:
 
 	void add_dup_file(gchar *name, gchar *digest)
@@ -240,13 +297,15 @@ class fTree:
 			node->name = strdup(name);
 			list->files.push_back(node);
 
-			this->hash_idx_map.emplace(digest, map_size);
+			this->hash_idx_map[digest] = map_size;
 		}
 		else
 		{
 			std::map<char *,int>::iterator it;
 
-			if ((it = this->hash_idx_map.find(digest)))
+			it = this->hash_idx_map.find(digest);
+
+			if (it)
 			{
 				hash_list_idx = it->second;
 				std::list<dList>::iterator _it = this->dup_list.begin();
@@ -262,7 +321,7 @@ class fTree:
 			}
 			else
 			{
-				this->hash_idx_map.emplace(digest, map_size);
+				this->hash_idx_map[digest] = map_size;
 			}
 		}
 	}
@@ -278,6 +337,21 @@ fTree::fTree(void)
 	this->root = NULL;
 }
 
+struct plx_ctx
+{
+	gint digest_type;
+	fTree *tree;
+};
+
+static void release_mem(void)
+{
+	fTree *tree = plx_ctx.tree;
+
+	if (tree)
+		tree->destroy_all();
+
+	return;
+}
 
 gsize
 get_digest_size_ascii(gint type)
