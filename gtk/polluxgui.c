@@ -97,6 +97,79 @@ struct file_node
 	gint nr_bucket;
 };
 
+struct dup_node
+{
+	gchar *path;
+	struct dup_node *next;
+	struct dup_node *prev;
+};
+
+struct dup_list
+{
+	gchar *digest;
+	struct dup_node *head;
+	struct dup_node *tail;
+	void (*insert_dnode)(struct dup_list *, struct dup_node *, gchar *);
+};
+
+struct file_tree
+{
+	struct file_node *root;
+	struct dup_list *dup_list;
+	gsize list_size;
+};
+
+gint
+__get_hash_idx(struct dup_list *, gsize size, gchar *digest, gsize dsize)
+{
+	gsize i;
+
+	for (i = 0; i < size; ++i)
+	{
+		if (!memcmp(dup_list[i].digest, digest, dsize))
+			return i;
+	}
+
+	return -1;
+}
+
+void
+insert_dnode(struct file_tree *tree, struct dup_node *node, gchar *digest)
+{
+	assert(tree);
+
+	if (!tree->dup_list)
+	{
+		tree->dup_list = calloc(1, sizeof(struct dup_node));
+		tree->list_size = 1;
+	}
+
+	if ((idx = __get_hash_idx(tree->dup_list, digest)) == -1)
+	{
+		tree->list_size += 1;
+		tree->dup_list = realloc(tree->dup_list, (tree->list_size * sizeof(struct dup_node)));
+		assert(tree->dup_list);
+	}
+	else
+	{
+		struct dup_list *list = &tree->dup_list[idx];
+
+		if (!list->head)
+		{
+			list->head = node;
+			list->tail = node;
+		}
+		else
+		{
+			list->tail->next = node;
+			node->prev = list->tail;
+			list->tail = node;
+		}
+	}
+
+	int idx = __get_hash_idx(tree->dup_list, digest);
+}
+
 #define PLX_INC_FILES(p) ++((p)->nr_files)
 #define PLX_INC_DUPS(p) ++((p)->nr_duplicates)
 #define PLX_ADD_MEM(p, m) ((p)->wasted_mem += (m))
@@ -134,6 +207,8 @@ struct pollux_ctx
 		GtkWidget *view;
 		gint initialised;
 	} tree;
+
+	struct file_tree *_tree;
 };
 
 struct pollux_ctx plx_ctx = {0};
@@ -433,6 +508,8 @@ __insert_file_node(gchar *path, gsize size)
 			{
 				PLX_INC_DUPS(&plx_ctx);
 				PLX_ADD_MEM(&plx_ctx, size);
+				struct dup_node *node = malloc(sizeof(struct dup_node));
+				plx_ctx._tree->insert_dnode(plx_ctx._tree, node, current_digest);
 				plx_dup_add_pair(&plx_ctx, nptr->path, path, nptr->digest);
 				free(current_digest);
 				break;
@@ -703,6 +780,12 @@ __attribute__((constructor)) __plx_init(void)
 	plx_ctx.gui.digests = hash_digests;
 	plx_ctx.digest_type = DIGEST_MD5;
 
+	plx_ctx._tree = malloc(sizeof(struct file_tree));
+	plx_ctx._tree->head = NULL;
+	plx_ctx._tree->tail = NULL;
+	plx_ctx._tree->digest = NULL;
+	plx_ctx._tree->insert_dnode = insert_dnode;
+
 	return;
 
 	fail:
@@ -716,6 +799,22 @@ __attribute__((destructor)) __plx_fini(void)
 	{
 		free(path_buf);
 		path_buf = NULL;
+	}
+
+	if (plx_ctx._tree)
+	{
+		struct dup_node *node = plx_ctx._tree->head;
+		struct dup_node *prev;
+
+		while (node)
+		{
+			prev = node;
+			node = node->next;
+			free(prev);
+		}
+
+		if (plx_ctx._tree->digest)
+			free(plx_ctx._tree->digest);
 	}
 
 	return;
