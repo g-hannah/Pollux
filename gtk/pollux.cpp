@@ -1,5 +1,8 @@
 #include <assert.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <openssl/conf.h>
+#include <openssl/evp.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -11,34 +14,73 @@
 
 #define PROG_NAME "Pollux"
 
-enum
-{
-	DIGEST_MD5,
-	DIGEST_SHA256,
-	DIGEST_SHA512,
-	NR_DIGESTS
-};
+#define DIGEST() EVP_sha512()
+#define DIGEST_SIZE (EVP_MD_size(DIGEST()) * 2)
 
-struct plx_ctx;
-
-static struct plx_ctx plx_ctx;
-static gsize get_digest_size_hex(gint type);
+static gchar *get_file_digest(gchar *) __nonnull((1)) __wur;
 
 class fNode
 {
+	public:
+
 	gchar *digest;
 	gchar *name;
 	gsize size;
 	fNode *left;
 	fNode *right;
-	bool have_digest;
-	bool added;
-	std::list<fNode> bucket;
-	gsize nr_bucket;
-
-	public:
+	fNode *parent;
 
 	fNode();
+	~fNode();
+
+	bool has_digest(void)
+	{
+		return this->have_digest;
+	}
+
+	void got_digest(bool tvalue)
+	{
+		this->have_digest = tvalue;
+	}
+
+	bool been_added(void)
+	{
+		return this->added;
+	}
+
+	void set_added(bool tvalue)
+	{
+		this->added = tvalue;
+	}
+
+	void add_to_bucket(fNode *node)
+	{
+		this->bucket.push_back(node);
+		this->nr_bucket += 1;
+	}
+
+	bool bucket_contains(gchar *digest, gsize size)
+	{
+		for (std::list<fNode *>::iterator it = this->bucket.begin(); it != this->bucket.end(); ++it)
+		{
+			if (!memcmp(digest, this->digest, size))
+				return true;
+		}
+
+		return false;
+	}
+
+	gint nr_items_bucket(void)
+	{
+		return this->nr_bucket;
+	}
+
+	private:
+
+	bool have_digest;
+	bool added;
+	std::list<fNode *> bucket;
+	gsize nr_bucket;
 };
 
 fNode::fNode(void)
@@ -48,9 +90,19 @@ fNode::fNode(void)
 	this->size = 0;
 	this->left = NULL;
 	this->right = NULL;
+	this->parent = NULL;
 	this->have_digest = false;
 	this->added = false;
-	this->nr_bucket = 0
+	this->nr_bucket = 0;
+}
+
+fNode::~fNode(void)
+{
+	if (this->digest)
+		free(this->digest);
+
+	if (this->name)
+		free(this->name);
 }
 
 /*
@@ -61,8 +113,6 @@ class dNode
 	public:
 
 	gchar *name;
-	dNode *next;
-	dNode *prev;
 
 	dNode();
 };
@@ -70,8 +120,6 @@ class dNode
 dNode::dNode(void)
 {
 	this->name = NULL;
-	this->next = NULL;
-	this->prev = NULL;
 }
 
 /*
@@ -85,7 +133,7 @@ class dList
 
 	gchar *digest;
 	gsize nr_nodes;
-	std::list files;
+	std::list<dNode *> files;
 
 	dList();
 };
@@ -94,7 +142,6 @@ dList::dList(void)
 {
 	this->digest = NULL;
 	this->nr_nodes = 0;
-	this->head = NULL;
 }
 
 class fTree
@@ -108,7 +155,7 @@ class fTree
 
 	void insert_file(gchar *name)
 	{
-		struct statb statb;
+		struct stat statb;
 		gsize size;
 
 		lstat(name, &statb);
@@ -163,37 +210,33 @@ class fTree
 			}
 			else
 			{
-				if (n->have_digest == false)
+				if (n->has_digest() == false)
 				{
 					n->digest = get_file_digest(n->name);
-					n->have_digest = true;
+					n->got_digest(true);
 				}
 
 				gchar *cur_digest = get_file_digest(name);
 
 				if (!memcmp(cur_digest, n->digest, digest_size))
 				{
-					if (n->added == false)
+					if (n->been_added() == false)
 						this->add_dup_file(n->name, n->digest);
 
 					this->add_dup_file(name, cur_digest);
 				}
 				else
 				{
-					if (n->nr_bucket > 0)
+					if (n->nr_items_bucket() > 0)
 					{
 						gint i;
-						gint nr_bucket = n->nr_bucket;
+						gint nr_bucket = n->nr_items_bucket();
 						bool is_dup = false;
 
-						for (std::list<fNode>::iterator it = n->bucket.begin(); it != n->bucket.end(); ++it)
+						if (n->bucket_contains(cur_digest, DIGEST_SIZE))
 						{
-							if (!memcmp(cur_digest, it->digest, digest_size))
-							{
-								this->add_dup_file(name, cur_digest);
-								is_dup = true;
-								break;
-							}
+							this->add_dup_file(name, cur_digest);
+							is_dup = true;
 						}
 
 						if (is_dup == false)
@@ -202,8 +245,7 @@ class fTree
 							_node->name = strdup(name);
 							_node->digest = strdup(cur_digest);
 
-							n->bucket.push_back(_node);
-							n->nr_bucket += 1;
+							n->add_to_bucket(_node);
 						}
 					}
 				}
@@ -240,10 +282,10 @@ class fTree
 			if (it)
 			{
 				hash_list_idx = it->second;
-				std::list<dList>::iterator _it = this->dup_list.begin();
+				std::list<dList *>::iterator _it = this->dup_list.begin();
 				gint _i = 0;
 
-				while (_i++ < hash_list_idx)
+				while (_it != this->dup_list.end() && _i++ < hash_list_idx)
 					++_it;
 
 				dNode *node = new dNode();
@@ -260,7 +302,7 @@ class fTree
 
 	fNode *root;
 	std::map<char *,int> hash_idx_map;
-	std::list<dList> dup_list;
+	std::list<dList *> dup_list;
 };
 
 fTree::fTree(void)
@@ -271,14 +313,14 @@ fTree::fTree(void)
 
 fTree::~fTree(void)
 {
-	std::list<dList>::iterator it = this->dup_list.begin();
+	std::list<dList *>::iterator it = this->dup_list.begin();
 
 	for (; it != this->dup_list.end(); ++it)
 	{
 		if (it->digest)
 			free(it->digest);
 
-		std::list<dNode>::iterator _it = it->files.begin();
+		std::list<dNode *>::iterator _it = it->files.begin();
 
 		for (; _it != it->files.end(); ++_it)
 		{
@@ -338,39 +380,109 @@ fTree::~fTree(void)
 	this->hash_idx_map.clear();
 }
 
-struct plx_ctx
+static fTree *tree;
+
+static void
+init_openssl(void)
 {
-	gint digest_type;
-	fTree *tree;
-};
-
-static void release_mem(void)
-{
-	fTree *tree = plx_ctx.tree;
-
-	if (tree)
-		tree->destroy_all();
-
-	return;
+	OPENSSL_config(NULL);
+	OpenSSL_add_all_digests();
 }
 
-gsize
-get_digest_size_ascii(gint type)
+#define READ_BLOCK 4096
+
+#define __ALIGN_SIZE(s) (((s) + 0xf) & ~(0xf))
+static char const hexchars[17] = "0123456789abcdef";
+
+gchar *
+get_file_digest(gchar *path)
 {
-	switch(type)
+	struct stat statb;
+	unsigned char *buffer = NULL;
+	gsize toread;
+	ssize_t n;
+	EVP_MD_CTX *ctx;
+	static unsigned char __digest[__ALIGN_SIZE(EVP_MAX_MD_SIZE + 1)];
+	static unsigned char __hex[__ALIGN_SIZE(EVP_MAX_MD_SIZE * 2 + 1)];
+	guint dlen = 0;
+	gint fd = -1;
+
+	lstat(path, &statb);
+
+	if ((fd = open(path, O_RDONLY)) < 0)
 	{
-		case DIGEST_SHA256:
-			return (gsize)64;
-			break;
-		case DIGEST_SHA512:
-			return (gsize)128;
-			break;
-		default:
-			return (gsize)32;
-			break;
+		std::cerr << "get_file_digest: failed to open \"" << path << "\"" << std::endl;
+		return NULL;
 	}
 
-	assert(0);
+	buffer = (unsigned char *)calloc((((statb.st_size+1) + 0xf) & ~(0xf)), 1);
+
+	toread = statb.st_size;
+
+	if (!(ctx = EVP_MD_CTX_create()))
+	{
+		std::cerr << "get_file_digest: failed to create MD CTX" << std::endl;
+		goto fail;
+	}
+
+	if (1 != EVP_DigestInit_ex(ctx, DIGEST(), NULL))
+	{
+		std::cerr << "get_file_digest: failed to initialise MD CTX" << std::endl;
+		goto fail;
+	}
+
+	while (toread > 0 && (n = read(fd, buffer, READ_BLOCK)))
+	{
+		if (n < 0)
+		{
+			if (errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)
+				continue;
+			else
+			{
+				std::cerr << "get_file_digest: failed to read from \"" << path << "\"" << std::endl;
+				goto fail;
+			}
+		}
+
+		buffer[n] = 0;
+		if (1 != EVP_DigestUpdate(ctx, buffer, n))
+		{
+			std::cerr << "get_file_digest: failed to update hash digest" << std::endl;
+			goto fail;
+		}
+
+		toread -= n;
+	}
+
+	if (1 != EVP_DigestFinal_ex(ctx, __digest, &dlen))
+	{
+		std::cerr << "get_file_digest: failed to finalise hash digest" << std::endl;
+		goto fail;
+	}
+
+	EVP_MD_CTX_destroy(ctx);
+	free(buffer);
+
+	gint i;
+	gint k;
+
+/*
+ * Hexlify the digest.
+ */
+	for (i = 0, k = 0; i < (gint)dlen; ++i)
+	{
+		__hex[k++] = hexchars[((__digest[i] >> 4) & 0xf)];
+		__hex[k++] = hexchars[(__digest[i] & 0xf)];
+	}
+
+	__hex[k] = 0;
+
+	return (gchar *)__hex;
+
+	fail:
+	free(buffer);
+	EVP_MD_CTX_destroy(ctx);
+	return NULL;
 }
 
 static gint
@@ -381,7 +493,6 @@ scan_files(gchar *dir)
 	struct stat statb;
 	DIR *dirp;
 	struct dirent *dinf;
-	fTree *tree = plx_ctx.tree;
 
 	if (*(p-1) != '/')
 	{
@@ -430,10 +541,7 @@ main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
-	memset(&plx_ctx, 0, sizeof(plx_ctx));
-	plx_ctx.tree = new fTree();
-
-	atexit(release_mem);
+	tree = new fTree();
 
 	lstat(argv[1], &statb);
 
@@ -443,11 +551,17 @@ main(int argc, char *argv[])
 		goto fail;
 	}
 
+	init_openssl();
+
 	if (scan_files(argv[1]) == -1)
 		goto fail;
 
+	delete tree;
+	return 0;
+
 	fail:
-	exit(EXIT_FAILURE);
+	delete tree;
+	return -1;
 }
 
 
