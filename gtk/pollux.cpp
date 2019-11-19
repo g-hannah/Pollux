@@ -1,7 +1,38 @@
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 #include <iostream>
 #include <list>
 #include <map>
 #include <gtk/gtk.h>
+
+enum
+{
+	DIGEST_MD5,
+	DIGEST_SHA256,
+	DIGEST_SHA512,
+	NR_DIGESTS
+};
+
+struct plx_ctx
+{
+	gint digest_type;
+	fTree *tree;
+};
+
+static struct plx_ctx plx_ctx;
+static gsize get_digest_size_hex(gint type);
+
+static void release_mem(void)
+{
+	fTree *tree = plx_ctx.tree;
+
+	if (tree)
+		tree->destroy_all();
+
+	return;
+}
 
 class fNode:
 {
@@ -64,7 +95,7 @@ class dList:
 
 	gchar *digest;
 	gsize nr_nodes;
-	dNode *head;
+	std::list files;
 
 	dList();
 };
@@ -178,7 +209,7 @@ class fTree:
 						{
 							fNode *_node = new fNode();
 							_node->name = strdup(name);
-							_node->digest = __dup_digest(cur_digest);
+							_node->digest = strdup(cur_digest);
 
 							n->bucket.push_back(_node);
 							n->nr_bucket += 1;
@@ -191,13 +222,179 @@ class fTree:
 
 	private:
 
+	void add_dup_file(gchar *name, gchar *digest)
+	{
+		gint hash_list_idx;
+		guint map_size;
+
+		map_size = this->hash_idx_map.size();
+
+		if (!map_size)
+		{
+			dList *list = new dList();
+			dNode *node = new dNode();
+			this->dup_list.push_back(list);
+
+			node->name = strdup(name);
+			list->files.push_back(node);
+
+			this->hash_idx_map.emplace(digest, map_size);
+		}
+		else
+		{
+			std::map<char *,int>::iterator it;
+
+			if ((it = this->hash_idx_map.find(digest)))
+			{
+				hash_list_idx = it->second;
+				std::list<dList>::iterator _it = this->dup_list.begin();
+				gint _i = 0;
+
+				while (_i++ < hash_list_idx)
+					++_it;
+
+				dNode *node = new dNode();
+				node->name = strdup(name);
+
+				_it->files.push_back(node);
+			}
+			else
+			{
+				this->hash_idx_map.emplace(digest, map_size);
+			}
+		}
+	}
+
 	fNode *root;
 	std::map<char *,int> hash_idx_map;
 	std::list<dList> dup_list;
 };
 
-fTree::FTree(void)
+fTree::fTree(void)
 {
 	this->nr_nodes = 0;
 	this->root = NULL;
 }
+
+
+gsize
+get_digest_size_ascii(gint type)
+{
+	switch(type)
+	{
+		case DIGEST_SHA256:
+			return (gsize)64;
+			break;
+		case DIGEST_SHA512:
+			return (gsize)128;
+			break;
+		default:
+			return (gsize)32;
+			break;
+	}
+
+	assert(0);
+}
+
+static gint
+scan_files(gchar *dir)
+{
+	gsize len = strlen(dir);
+	gchar *p = (dir + len);
+	struct stat statb;
+	DIR *dirp;
+	struct dirent *dinf;
+	fTree *tree = plx_ctx.tree;
+
+	if (*(p-1) != '/')
+	{
+		*p++ = '/';
+		*p = 0;
+		++len;
+	}
+
+	dirp = fdopendir(open(dir, O_DIRECTORY));
+
+	assert(dirp);
+
+	while ((dinf = readdir(dirp)))
+	{
+		if (!strcmp(".", dinf->d_name) ||
+			!strcmp("..", dinf->d_name) ||
+			dinf->d_name[0] == '.')
+			continue;
+
+		strcpy(p, dinf->d_name);
+		lstat(dir, &statb);
+
+		if (S_ISDIR(statb.st_mode))
+		{
+			scan_files(dir);
+		}
+		else
+		if (S_ISREG(statb.st_mode))
+		{
+			tree->insert_file(dir);
+		}
+	}
+
+	*p = 0;
+	return 0;
+}
+
+int
+main(int argc, char *argv[])
+{
+	struct stat statb;
+
+	if (argc < 2)
+	{
+		std::cerr << PROG_NAME << " <directory>" << std::endl;
+		exit(EXIT_FAILURE);
+	}
+
+	memset(&plx_ctx, 0, sizeof(plx_ctx));
+	plx_ctx.tree = new fTree();
+
+	atexit(release_mem);
+
+	lstat(argv[1], &statb);
+
+	if (!S_ISDIR(statb.st_mode))
+	{
+		std::cerr << "\"" << argv[1] << "\" is not a directory!" << std::endl;
+		goto fail;
+	}
+
+	if (scan_files(argv[1]) == -1)
+		goto fail;
+
+	fail:
+	exit(EXIT_FAILURE);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
