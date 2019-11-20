@@ -280,6 +280,20 @@ class fTree
 		}
 	}
 
+	void show_duplicates(void)
+	{
+		for (std::list<dList>::iterator it = this->dup_list.begin(); it != this->dup_list.end(); ++it)
+		{
+			std::cout << "** [" << it->digest << "] **\n" << std::endl;
+			for (std::list<dNode>::iterator node_it = it->files.begin(); node_it != it->files.end(); ++node_it)
+			{
+				std::cout << node_it->name << std::endl;
+			}
+
+			std::cout << "\n\n\n"
+		}
+	}
+
 	private:
 
 	void add_dup_file(gchar *name, gchar *digest)
@@ -585,6 +599,8 @@ main(int argc, char *argv[])
 
 	if (scan_files(argv[1]) == -1)
 		goto fail;
+
+	tree->show_duplicates();
 
 	delete tree;
 	return 0;
