@@ -13,6 +13,7 @@
 #include <gtk/gtk.h>
 
 #define PROG_NAME "Pollux"
+#define POLLUX_BUILD "0.0.1"
 
 #define DIGEST() EVP_sha512()
 #define DIGEST_SIZE (EVP_MD_size(DIGEST()) * 2)
@@ -53,7 +54,7 @@ class fNode
 		this->added = tvalue;
 	}
 
-	void add_to_bucket(fNode *node)
+	void add_to_bucket(fNode& node)
 	{
 		this->bucket.push_back(node);
 		this->nr_bucket += 1;
@@ -61,7 +62,7 @@ class fNode
 
 	bool bucket_contains(gchar *digest, gsize size)
 	{
-		for (std::list<fNode *>::iterator it = this->bucket.begin(); it != this->bucket.end(); ++it)
+		for (std::list<fNode>::iterator it = this->bucket.begin(); it != this->bucket.end(); ++it)
 		{
 			if (!memcmp(digest, this->digest, size))
 				return true;
@@ -79,7 +80,7 @@ class fNode
 
 	bool have_digest;
 	bool added;
-	std::list<fNode *> bucket;
+	std::list<fNode> bucket;
 	gsize nr_bucket;
 };
 
@@ -133,7 +134,7 @@ class dList
 
 	gchar *digest;
 	gsize nr_nodes;
-	std::list<dNode *> files;
+	std::list<dNode> files;
 
 	dList();
 };
@@ -182,6 +183,7 @@ class fTree
 					n->left = new fNode();
 					n->left->name = strdup(name);
 					n->left->size = size;
+					n->left->parent = n;
 					this->nr_nodes += 1;
 
 					return;
@@ -200,6 +202,7 @@ class fTree
 					n->right = new fNode();
 					n->right->name = strdup(name);
 					n->right->size = size;
+					n->right->parent = n;
 					this->nr_nodes += 1;
 				}
 				else
@@ -208,17 +211,28 @@ class fTree
 					continue;
 				}
 			}
-			else
+			else /* size == n->size */
 			{
 				if (n->has_digest() == false)
 				{
-					n->digest = get_file_digest(n->name);
+/*
+ * get_file_digest() returns pointer to static memory so we
+ * must use strdup() to save it.
+ */
+					n->digest = strdup(get_file_digest(n->name));
 					n->got_digest(true);
 				}
 
+/*
+ * Don't need to strdup() this one because either we
+ * will find that we don't need to keep it (cause the
+ * hash is already in our bucket of digests), or we will
+ * be calling strdup() later to save it at the end of
+ * the bucket.
+ */
 				gchar *cur_digest = get_file_digest(name);
 
-				if (!memcmp(cur_digest, n->digest, digest_size))
+				if (!memcmp(cur_digest, n->digest, DIGEST_SIZE))
 				{
 					if (n->been_added() == false)
 						this->add_dup_file(n->name, n->digest);
@@ -227,6 +241,11 @@ class fTree
 				}
 				else
 				{
+/*
+ * O(N) check of our bucket of digests to see if this
+ * hash is already in there. If not, save this one
+ * at the end of the bucket.
+ */
 					if (n->nr_items_bucket() > 0)
 					{
 						gint i;
@@ -241,12 +260,20 @@ class fTree
 
 						if (is_dup == false)
 						{
-							fNode *_node = new fNode();
-							_node->name = strdup(name);
-							_node->digest = strdup(cur_digest);
+							fNode _node;
+							_node.name = strdup(name);
+							_node.digest = strdup(cur_digest);
 
 							n->add_to_bucket(_node);
 						}
+					}
+					else
+					{
+						fNode _node;
+						_node.name = strdup(name);
+						_node.digest = strdup(cur_digest);
+
+						n->add_to_bucket(_node);
 					}
 				}
 			}
@@ -264,13 +291,13 @@ class fTree
 
 		if (!map_size)
 		{
-			dList *list = new dList();
-			dNode *node = new dNode();
+			dList list;
+			dNode node;
+
+			node.name = strdup(name);
+			list.files.push_back(node);
+
 			this->dup_list.push_back(list);
-
-			node->name = strdup(name);
-			list->files.push_back(node);
-
 			this->hash_idx_map[digest] = map_size;
 		}
 		else
@@ -279,17 +306,20 @@ class fTree
 
 			it = this->hash_idx_map.find(digest);
 
-			if (it)
+			if (it != this->hash_idx_map.end())
 			{
 				hash_list_idx = it->second;
-				std::list<dList *>::iterator _it = this->dup_list.begin();
+				std::list<dList>::iterator _it = this->dup_list.begin();
 				gint _i = 0;
 
-				while (_it != this->dup_list.end() && _i++ < hash_list_idx)
+				while (_it != this->dup_list.end() && _i < hash_list_idx)
+				{
 					++_it;
+					++_i;
+				}
 
-				dNode *node = new dNode();
-				node->name = strdup(name);
+				dNode node;
+				node.name = strdup(name);
 
 				_it->files.push_back(node);
 			}
@@ -302,7 +332,7 @@ class fTree
 
 	fNode *root;
 	std::map<char *,int> hash_idx_map;
-	std::list<dList *> dup_list;
+	std::list<dList> dup_list;
 };
 
 fTree::fTree(void)
@@ -313,22 +343,18 @@ fTree::fTree(void)
 
 fTree::~fTree(void)
 {
-	std::list<dList *>::iterator it = this->dup_list.begin();
-
-	for (; it != this->dup_list.end(); ++it)
+	for (std::list<dList>::iterator it = this->dup_list.begin(); it != this->dup_list.end(); ++it)
 	{
 		if (it->digest)
 			free(it->digest);
 
-		std::list<dNode *>::iterator _it = it->files.begin();
-
-		for (; _it != it->files.end(); ++_it)
+		for (std::list<dNode>::iterator _it = it->files.begin(); _it != it->files.end(); ++_it)
 		{
 			if (_it->name)
 				free(_it->name);
 		}
 
-		_it->files.clear();
+		it->files.clear();
 	}
 
 	this->dup_list.clear();
@@ -535,6 +561,8 @@ main(int argc, char *argv[])
 {
 	struct stat statb;
 
+	std::cout << "Pollux build " << POLLUX_BUILD << " (written in C++)" << std::endl;
+
 	if (argc < 2)
 	{
 		std::cerr << PROG_NAME << " <directory>" << std::endl;
@@ -553,6 +581,8 @@ main(int argc, char *argv[])
 
 	init_openssl();
 
+	std::cout << "Starting scan in directory " << argv[1] << std::endl;
+
 	if (scan_files(argv[1]) == -1)
 		goto fail;
 
@@ -563,29 +593,3 @@ main(int argc, char *argv[])
 	delete tree;
 	return -1;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
