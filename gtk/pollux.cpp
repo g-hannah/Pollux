@@ -66,14 +66,18 @@ class fNode
 		this->nr_bucket += 1;
 	}
 
-	bool bucket_contains(gchar *digest, gsize size)
+	bool bucket_contains(gchar *digest, gsize size, gint *_idx)
 	{
 		for (std::list<fNode>::iterator it = this->bucket.begin(); it != this->bucket.end(); ++it)
 		{
 			if (!memcmp(digest, this->digest, size))
+			{
+				*_idx = it->get_hash_idx();
 				return true;
+			}
 		}
 
+		*_idx = -1;
 		return false;
 	}
 
@@ -82,12 +86,18 @@ class fNode
 		return this->nr_bucket;
 	}
 
+	gint get_hash_idx(void)
+	{
+		return this->hash_idx;
+	}
+
 	private:
 
 	bool have_digest;
 	bool added;
 	std::list<fNode> bucket;
 	gsize nr_bucket;
+	gint hash_idx;
 };
 
 fNode::fNode(void)
@@ -101,6 +111,7 @@ fNode::fNode(void)
 	this->have_digest = false;
 	this->added = false;
 	this->nr_bucket = 0;
+	this->hash_idx = -1;
 }
 
 fNode::~fNode(void)
@@ -234,10 +245,14 @@ class fTree
  * get_file_digest() returns pointer to static memory so we
  * must use strdup() to save it.
  */
-					n->digest = strdup(get_file_digest(n->name));
+					gchar *tmp = get_file_digest(n->name);
+					if (!tmp)
+						return;
+
+					n->digest = strdup(tmp);
 					n->got_digest(true);
 #ifdef DEBUG
-					std::cerr << "Got digest of file at current node: " << n->digest << std::endl;
+					std::cerr << "Got digest of \"" << n->name << "\" at current node: " << n->digest << std::endl;
 #endif
 				}
 
@@ -250,8 +265,11 @@ class fTree
  */
 				gchar *cur_digest = get_file_digest(name);
 
+				if (!cur_digest)
+					return;
+
 #ifdef DEBUG
-				std::cerr << "Got digest of current file: " << cur_digest << std::endl;
+				std::cerr << "Got digest of current file \"" << name << "\": " << cur_digest << std::endl;
 #endif
 
 				if (!memcmp(cur_digest, n->digest, DIGEST_SIZE))
@@ -261,13 +279,15 @@ class fTree
 #ifdef DEBUG
 						std::cerr << "Adding duplicate file to linked list" << std::endl;
 #endif
-						this->add_dup_file(n->name, n->digest);
+						this->add_dup_file(n->name, n->digest, n->get_hash_idx());
 					}
 
 #ifdef DEBUG
 					std::cerr << "Adding duplicate file to linked list" << std::endl;
 #endif
-					this->add_dup_file(name, cur_digest);
+					this->add_dup_file(name, cur_digest, n->get_hash_idx());
+
+					break;
 				}
 				else
 				{
@@ -284,13 +304,14 @@ class fTree
 						gint i;
 						gint nr_bucket = n->nr_items_bucket();
 						bool is_dup = false;
+						gint idx;
 
-						if (n->bucket_contains(cur_digest, DIGEST_SIZE))
+						if (n->bucket_contains(cur_digest, DIGEST_SIZE, &idx))
 						{
 #ifdef DEBUG
 							std::cerr << "Found match in bucket. Inserting duplicate file to linked list" << std::endl;
 #endif
-							this->add_dup_file(name, cur_digest);
+							this->add_dup_file(name, cur_digest, idx);
 							is_dup = true;
 						}
 
@@ -304,9 +325,10 @@ class fTree
 							_node.digest = strdup(cur_digest);
 
 							n->add_to_bucket(_node);
+							return;
 						}
 					}
-					else
+					else /* n->nr_items_bucket() == 0 */
 					{
 #ifdef DEBUG
 						std::cerr << "Adding first file to bucket" << std::endl;
@@ -316,10 +338,11 @@ class fTree
 						_node.digest = strdup(cur_digest);
 
 						n->add_to_bucket(_node);
+						return;
 					}
-				}
-			}
-		}
+				} /* cur_digest != n->digest */
+			} /* size == n->size */
+		} /* while (true) */
 	}
 
 	void show_duplicates(void)
@@ -341,72 +364,42 @@ class fTree
 
 	private:
 
-	void add_dup_file(gchar *name, gchar *digest)
+	void add_dup_file(gchar *name, gchar *digest, gint idx)
 	{
-		gint hash_list_idx;
-		guint map_size;
-
-		map_size = this->hash_idx_map.size();
-
-		if (!map_size)
+		if (idx == -1)
 		{
+/*
+ * Make a new linked list for this digest.
+ */
 			dList list;
 			dNode node;
 
 			list.digest = strdup(digest);
 			node.name = strdup(name);
 			list.files.push_back(node);
-
 			this->dup_list.push_back(list);
-			this->hash_idx_map[digest] = map_size;
-#ifdef DEBUG
-			std::cerr << "[Key: " << digest << ", Value: " << map_size << "]" << std::endl;
-#endif
 
 			return;
 		}
 		else
 		{
-			std::map<char *,int>::iterator map_it;
+			std::list<dList>::iterator list_it = this->dup_list.begin();
+			gint i = 0;
 
-			map_it = this->hash_idx_map.find(digest);
-
-			if (map_it != this->hash_idx_map.end())
+			while (i < idx && list_it != this->dup_list.end())
 			{
-				hash_list_idx = map_it->second;
-				std::list<dList>::iterator list_it = this->dup_list.begin();
-				gint _i = 0;
-
-#ifdef DEBUG
-				std::cerr << digest << " has index " << hash_list_idx << " in linked list" << std::endl;
-#endif
-
-/*
- * Point the iterator to the correct list element
- * that contains our digest and index value.
- */
-				while (list_it != this->dup_list.end() && _i < hash_list_idx)
-				{
-					++list_it;
-					++_i;
-				}
-
-				assert(!memcmp(digest, list_it->digest, DIGEST_SIZE));
-				dNode node;
-				node.name = strdup(name);
-
-				list_it->files.push_back(node);
-				return;
+				++list_it;
+				++i;
 			}
-			else
-			{
-				this->hash_idx_map[digest] = map_size;
-#ifdef DEBUG
-				std::cerr << "Digest not in map. Adding to map" << std::endl;
-				std::cerr << "[Key: " << digest << ", Value: " << map_size << "]" << std::endl;
-#endif
-				return;
-			}
+
+			assert(!memcmp(digest, list_it->digest, DIGEST_SIZE));
+
+			dNode node;
+
+			node.name = strdup(name);
+			list_it->files.push_back(node);
+
+			return;
 		}
 	}
 
@@ -515,9 +508,20 @@ get_file_digest(gchar *path)
 
 	lstat(path, &statb);
 
+	memset(__digest, 0, DIGEST_SIZE / 2);
+	memset(__hex, 0, DIGEST_SIZE);
+
 	if ((fd = open(path, O_RDONLY)) < 0)
 	{
-		std::cerr << "get_file_digest: failed to open \"" << path << "\"" << std::endl;
+		switch(errno)
+		{
+			case EPERM:
+				std::cerr << "No permission to open \"" << path << "\"" << std::endl;
+				break;
+			default:
+				std::cerr << "Failed to open \"" << path << "\" " << strerror(errno) << std::endl;
+		}
+
 		return NULL;
 	}
 
@@ -583,9 +587,14 @@ get_file_digest(gchar *path)
 
 	__hex[k] = 0;
 
+	close(fd);
+	fd = -1;
 	return (gchar *)__hex;
 
 	fail:
+
+	close(fd);
+	fd = -1;
 	free(buffer);
 	EVP_MD_CTX_destroy(ctx);
 	return NULL;
