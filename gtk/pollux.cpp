@@ -506,7 +506,7 @@ get_file_digest(gchar *path)
 		return NULL;
 	}
 
-	buffer = (unsigned char *)calloc((((statb.st_size+1) + 0xf) & ~(0xf)), 1);
+	buffer = (unsigned char *)calloc(__ALIGN_SIZE(statb.st_size+1), 1);
 
 	toread = statb.st_size;
 
