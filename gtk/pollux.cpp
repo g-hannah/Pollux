@@ -66,18 +66,16 @@ class fNode
 		this->nr_bucket += 1;
 	}
 
-	bool bucket_contains(gchar *digest, gsize size, gint *_idx)
+	bool bucket_contains(gchar *digest, gsize size)
 	{
 		for (std::list<fNode>::iterator it = this->bucket.begin(); it != this->bucket.end(); ++it)
 		{
-			if (!memcmp(digest, this->digest, size))
+			if (!memcmp(digest, it->digest, size))
 			{
-				*_idx = it->get_hash_idx();
 				return true;
 			}
 		}
 
-		*_idx = -1;
 		return false;
 	}
 
@@ -86,18 +84,12 @@ class fNode
 		return this->nr_bucket;
 	}
 
-	gint get_hash_idx(void)
-	{
-		return this->hash_idx;
-	}
-
 	private:
 
 	bool have_digest;
 	bool added;
 	std::list<fNode> bucket;
 	gsize nr_bucket;
-	gint hash_idx;
 };
 
 fNode::fNode(void)
@@ -111,7 +103,6 @@ fNode::fNode(void)
 	this->have_digest = false;
 	this->added = false;
 	this->nr_bucket = 0;
-	this->hash_idx = -1;
 }
 
 fNode::~fNode(void)
@@ -141,6 +132,13 @@ dNode::dNode(void)
 }
 
 /*
+ * Now using a map of type std::map<gchar *,std::list<dNode> >
+ *
+ * Gives O(log(N)) search time to find the linked list of
+ * files that match the digest (which is the key).
+ */
+#if 0
+/*
  * Linked list of digests, containing
  * a head pointer to linked list of
  * all the files that have this digest.
@@ -149,11 +147,21 @@ class dList
 {
 	public:
 
-	gchar *digest;
 	gsize nr_nodes;
 	std::list<dNode> files;
 
 	dList();
+
+	gint get_nr_items(void)
+	{
+		return this->nr_nodes;
+	}
+
+	gint add_node(dNode node)
+	{
+		this->files.push_back(node);
+		this->nr_nodes += 1;
+	}
 };
 
 dList::dList(void)
@@ -161,6 +169,7 @@ dList::dList(void)
 	this->digest = NULL;
 	this->nr_nodes = 0;
 }
+#endif
 
 class fTree
 {
@@ -279,13 +288,13 @@ class fTree
 #ifdef DEBUG
 						std::cerr << "Adding duplicate file to linked list" << std::endl;
 #endif
-						this->add_dup_file(n->name, n->digest, n->get_hash_idx());
+						this->add_dup_file(n->name, n->digest);
 					}
 
 #ifdef DEBUG
 					std::cerr << "Adding duplicate file to linked list" << std::endl;
 #endif
-					this->add_dup_file(name, cur_digest, n->get_hash_idx());
+					this->add_dup_file(name, cur_digest);
 
 					break;
 				}
@@ -306,12 +315,12 @@ class fTree
 						bool is_dup = false;
 						gint idx;
 
-						if (n->bucket_contains(cur_digest, DIGEST_SIZE, &idx))
+						if (n->bucket_contains(cur_digest, DIGEST_SIZE))
 						{
 #ifdef DEBUG
 							std::cerr << "Found match in bucket. Inserting duplicate file to linked list" << std::endl;
 #endif
-							this->add_dup_file(name, cur_digest, idx);
+							this->add_dup_file(name, cur_digest);
 							is_dup = true;
 						}
 
@@ -350,62 +359,50 @@ class fTree
 #ifdef DEBUG
 		std::cerr << "Showing list of duplicate files" << std::endl;
 #endif
-		for (std::list<dList>::iterator it = this->dup_list.begin(); it != this->dup_list.end(); ++it)
+		for (std::map<gchar *,std::list<dNode> >::iterator map_it = this->dup_list.begin(); map_it != this->dup_list.end(); ++map_it)
 		{
-			std::cerr << "** [" << it->digest << "] **\n" << std::endl;
-			for (std::list<dNode>::iterator node_it = it->files.begin(); node_it != it->files.end(); ++node_it)
+			std::cerr << "** [" << map_it->first << "] **\n" << std::endl;
+			for (std::list<dNode>::iterator node_it = map_it->second.begin(); node_it != map_it->second.end(); ++node_it)
 			{
 				std::cerr << node_it->name << std::endl;
 			}
 
 			std::cerr << "\n\n\n";
 		}
+
+#ifdef DEBUG
+		for (std::map<gchar *,std::list<dNode> >::iterator map_it = this->dup_list.begin(); map_it != this->dup_list.end(); ++map_it)
+			std::cerr << map_it->first << std::endl;
+#endif
 	}
 
 	private:
 
-	void add_dup_file(gchar *name, gchar *digest, gint idx)
+	void add_dup_file(gchar *name, gchar *digest)
 	{
-		if (idx == -1)
+		dNode node;
+
+		node.name = strdup(name);
+
+		for (std::map<gchar *,std::list<dNode> >::iterator map_it = this->dup_list.begin(); map_it != this->dup_list.end(); ++map_it)
 		{
-/*
- * Make a new linked list for this digest.
- */
-			dList list;
-			dNode node;
-
-			list.digest = strdup(digest);
-			node.name = strdup(name);
-			list.files.push_back(node);
-			this->dup_list.push_back(list);
-
-			return;
-		}
-		else
-		{
-			std::list<dList>::iterator list_it = this->dup_list.begin();
-			gint i = 0;
-
-			while (i < idx && list_it != this->dup_list.end())
+			if (!memcmp(digest, map_it->first, DIGEST_SIZE))
 			{
-				++list_it;
-				++i;
+				map_it->second.push_back(node);
+				return;
 			}
-
-			assert(!memcmp(digest, list_it->digest, DIGEST_SIZE));
-
-			dNode node;
-
-			node.name = strdup(name);
-			list_it->files.push_back(node);
-
-			return;
 		}
+
+		std::list<dNode> new_list;
+
+		new_list.push_back(node);
+		this->dup_list[digest] = new_list;
+
+		return;
 	}
 
 	fNode *root;
-	std::map<char *,int> hash_idx_map;
-	std::list<dList> dup_list;
+	std::map<gchar *,std::list<dNode> > dup_list;
 };
 
 fTree::fTree(void)
@@ -416,20 +413,6 @@ fTree::fTree(void)
 
 fTree::~fTree(void)
 {
-	for (std::list<dList>::iterator it = this->dup_list.begin(); it != this->dup_list.end(); ++it)
-	{
-		if (it->digest)
-			free(it->digest);
-
-		for (std::list<dNode>::iterator _it = it->files.begin(); _it != it->files.end(); ++_it)
-		{
-			if (_it->name)
-				free(_it->name);
-		}
-
-		it->files.clear();
-	}
-
 	this->dup_list.clear();
 
 	if (this->root)
@@ -475,8 +458,6 @@ fTree::~fTree(void)
 			}
 		}
 	} /* if this->root */
-
-	this->hash_idx_map.clear();
 }
 
 static fTree *tree;
