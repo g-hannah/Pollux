@@ -597,7 +597,7 @@ scan_files(gchar *dir)
 		++len;
 	}
 
-	std::cerr << "Opening directory \"" << dir << "\"" << std::endl;
+	std::cerr << "Scanning directory \"" << dir << "\"" << std::endl;
 	dirp = fdopendir(open(dir, O_DIRECTORY));
 
 	assert(dirp);
@@ -619,7 +619,9 @@ scan_files(gchar *dir)
 		else
 		if (S_ISREG(statb.st_mode))
 		{
+#ifdef DEBUG
 			std::cerr << "Inserting \"" << dir << "\" into binary tree" << std::endl;
+#endif
 			tree->insert_file(dir);
 		}
 	}
