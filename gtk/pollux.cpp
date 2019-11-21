@@ -3,6 +3,8 @@
 #include <fcntl.h>
 #include <openssl/conf.h>
 #include <openssl/evp.h>
+#include <setjmp.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -19,6 +21,10 @@
 #define DIGEST_SIZE (EVP_MD_size(DIGEST()) * 2)
 
 static gchar *get_file_digest(gchar *) __nonnull((1)) __wur;
+
+static struct sigaction sigint_old;
+static struct sigaction sigint_new;
+static sigjmp_buf __root_env__;
 
 class fNode
 {
@@ -167,6 +173,9 @@ class fTree
 			this->root = new fNode();
 			this->root->name = strdup(name);
 			this->root->size = size;
+			this->root->left = NULL;
+			this->root->right = NULL;
+			this->root->parent = NULL;
 			this->nr_nodes += 1;
 
 			return;
@@ -185,7 +194,9 @@ class fTree
 					n->left->size = size;
 					n->left->parent = n;
 					this->nr_nodes += 1;
-
+#ifdef DEBUG
+					std::cerr << "Inserted @ " << &n->left << std::endl;
+#endif
 					return;
 				}
 				else
@@ -204,6 +215,10 @@ class fTree
 					n->right->size = size;
 					n->right->parent = n;
 					this->nr_nodes += 1;
+#ifdef DEBUG
+					std::cerr << "Inserted @ %p " << &n->right << std::endl;
+#endif
+					return;
 				}
 				else
 				{
@@ -221,6 +236,9 @@ class fTree
  */
 					n->digest = strdup(get_file_digest(n->name));
 					n->got_digest(true);
+#ifdef DEBUG
+					std::cerr << "Got digest of file at current node: " << n->digest << std::endl;
+#endif
 				}
 
 /*
@@ -232,11 +250,23 @@ class fTree
  */
 				gchar *cur_digest = get_file_digest(name);
 
+#ifdef DEBUG
+				std::cerr << "Got digest of current file: " << cur_digest << std::endl;
+#endif
+
 				if (!memcmp(cur_digest, n->digest, DIGEST_SIZE))
 				{
 					if (n->been_added() == false)
+					{
+#ifdef DEBUG
+						std::cerr << "Adding duplicate file to linked list" << std::endl;
+#endif
 						this->add_dup_file(n->name, n->digest);
+					}
 
+#ifdef DEBUG
+					std::cerr << "Adding duplicate file to linked list" << std::endl;
+#endif
 					this->add_dup_file(name, cur_digest);
 				}
 				else
@@ -246,6 +276,9 @@ class fTree
  * hash is already in there. If not, save this one
  * at the end of the bucket.
  */
+#ifdef DEBUG
+					std::cerr << "Searching bucket for matching digest" << std::endl;
+#endif
 					if (n->nr_items_bucket() > 0)
 					{
 						gint i;
@@ -254,12 +287,18 @@ class fTree
 
 						if (n->bucket_contains(cur_digest, DIGEST_SIZE))
 						{
+#ifdef DEBUG
+							std::cerr << "Found match in bucket. Inserting duplicate file to linked list" << std::endl;
+#endif
 							this->add_dup_file(name, cur_digest);
 							is_dup = true;
 						}
 
 						if (is_dup == false)
 						{
+#ifdef DEBUG
+							std::cerr << "No match in bucket. Adding file to bucket" << std::endl;
+#endif
 							fNode _node;
 							_node.name = strdup(name);
 							_node.digest = strdup(cur_digest);
@@ -269,6 +308,9 @@ class fTree
 					}
 					else
 					{
+#ifdef DEBUG
+						std::cerr << "Adding first file to bucket" << std::endl;
+#endif
 						fNode _node;
 						_node.name = strdup(name);
 						_node.digest = strdup(cur_digest);
@@ -282,15 +324,18 @@ class fTree
 
 	void show_duplicates(void)
 	{
+#ifdef DEBUG
+		std::cerr << "Showing list of duplicate files" << std::endl;
+#endif
 		for (std::list<dList>::iterator it = this->dup_list.begin(); it != this->dup_list.end(); ++it)
 		{
-			std::cout << "** [" << it->digest << "] **\n" << std::endl;
+			std::cerr << "** [" << it->digest << "] **\n" << std::endl;
 			for (std::list<dNode>::iterator node_it = it->files.begin(); node_it != it->files.end(); ++node_it)
 			{
-				std::cout << node_it->name << std::endl;
+				std::cerr << node_it->name << std::endl;
 			}
 
-			std::cout << "\n\n\n";
+			std::cerr << "\n\n\n";
 		}
 	}
 
@@ -308,38 +353,59 @@ class fTree
 			dList list;
 			dNode node;
 
+			list.digest = strdup(digest);
 			node.name = strdup(name);
 			list.files.push_back(node);
 
 			this->dup_list.push_back(list);
 			this->hash_idx_map[digest] = map_size;
+#ifdef DEBUG
+			std::cerr << "[Key: " << digest << ", Value: " << map_size << "]" << std::endl;
+#endif
+
+			return;
 		}
 		else
 		{
-			std::map<char *,int>::iterator it;
+			std::map<char *,int>::iterator map_it;
 
-			it = this->hash_idx_map.find(digest);
+			map_it = this->hash_idx_map.find(digest);
 
-			if (it != this->hash_idx_map.end())
+			if (map_it != this->hash_idx_map.end())
 			{
-				hash_list_idx = it->second;
-				std::list<dList>::iterator _it = this->dup_list.begin();
+				hash_list_idx = map_it->second;
+				std::list<dList>::iterator list_it = this->dup_list.begin();
 				gint _i = 0;
 
-				while (_it != this->dup_list.end() && _i < hash_list_idx)
+#ifdef DEBUG
+				std::cerr << digest << " has index " << hash_list_idx << " in linked list" << std::endl;
+#endif
+
+/*
+ * Point the iterator to the correct list element
+ * that contains our digest and index value.
+ */
+				while (list_it != this->dup_list.end() && _i < hash_list_idx)
 				{
-					++_it;
+					++list_it;
 					++_i;
 				}
 
+				assert(!memcmp(digest, list_it->digest, DIGEST_SIZE));
 				dNode node;
 				node.name = strdup(name);
 
-				_it->files.push_back(node);
+				list_it->files.push_back(node);
+				return;
 			}
 			else
 			{
 				this->hash_idx_map[digest] = map_size;
+#ifdef DEBUG
+				std::cerr << "Digest not in map. Adding to map" << std::endl;
+				std::cerr << "[Key: " << digest << ", Value: " << map_size << "]" << std::endl;
+#endif
+				return;
 			}
 		}
 	}
@@ -541,6 +607,7 @@ scan_files(gchar *dir)
 		++len;
 	}
 
+	std::cerr << "Opening directory \"" << dir << "\"" << std::endl;
 	dirp = fdopendir(open(dir, O_DIRECTORY));
 
 	assert(dirp);
@@ -562,12 +629,44 @@ scan_files(gchar *dir)
 		else
 		if (S_ISREG(statb.st_mode))
 		{
+			std::cerr << "Inserting \"" << dir << "\" into binary tree" << std::endl;
 			tree->insert_file(dir);
 		}
 	}
 
+	closedir(dirp);
+
 	*p = 0;
 	return 0;
+}
+
+static void
+catch_sigint(int signo)
+{
+	if (signo != SIGINT)
+		return;
+
+	siglongjmp(__root_env__, 1);
+}
+
+static void
+__attribute__((constructor)) __pollux_init(void)
+{
+	memset(&sigint_new, 0, sizeof(sigint_new));
+
+	sigint_new.sa_handler = catch_sigint;
+	sigint_new.sa_flags = 0;
+
+	if (sigaction(SIGINT, &sigint_old, &sigint_new) < 0)
+	{
+		std::cerr << "__pollux_init: failed to set signal handler for SIGINT" << std::endl;
+		goto fail;
+	}
+
+	return;
+
+	fail:
+	exit(EXIT_FAILURE);
 }
 
 int
@@ -575,7 +674,7 @@ main(int argc, char *argv[])
 {
 	struct stat statb;
 
-	std::cout << "Pollux build " << POLLUX_BUILD << " (written in C++)" << std::endl;
+	std::cerr << "Pollux build " << POLLUX_BUILD << " (written in C++)" << std::endl;
 
 	if (argc < 2)
 	{
@@ -593,14 +692,23 @@ main(int argc, char *argv[])
 		goto fail;
 	}
 
+	if (sigsetjmp(__root_env__, 1) != 0)
+	{
+		std::cerr << "Caught user-generated signal" << std::endl;
+		goto out_release_mem;
+	}
+
 	init_openssl();
 
-	std::cout << "Starting scan in directory " << argv[1] << std::endl;
+	std::cerr << "Starting scan in directory " << argv[1] << std::endl;
 
 	if (scan_files(argv[1]) == -1)
 		goto fail;
 
 	tree->show_duplicates();
+
+
+	out_release_mem:
 
 	delete tree;
 	return 0;
