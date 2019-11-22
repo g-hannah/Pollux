@@ -26,6 +26,142 @@ static struct sigaction sigint_old;
 static struct sigaction sigint_new;
 static sigjmp_buf __root_env__;
 
+typedef void (*gcallback_t)(GtkWidget *, gpointer);
+
+struct digest_options
+{
+	GtkWidget *menu_item;
+	gint type;
+	const gchar *name;
+	gcallback_t set_digest_func;
+};
+
+enum
+{
+	DIGEST_MD5,
+	DIGEST_SHA256,
+	DIGEST_SHA512,
+	NR_DIGESTS
+};
+
+#define __DEFAULT_DIGEST DIGEST_MD5
+
+static GtkWidget digest_md5;
+static GtkWidget digest_sha256;
+static GtkWidget digest_sha512;
+
+static struct digest_options menu_digests[NR_DIGESTS] =
+{
+	{ &digest_md5, DIGEST_MD5, (const gchar *)"MD5", on_digest_select },
+	{ &digest_sha256, DIGEST_SHA256, (const gchar *)"SHA256", on_digest_select },
+	{ &digest_sha512, DIGEST_SHA512, (const gchar *)"SHA512", on_digest_select }
+};
+
+/*
+ * ___________________________________________________________________________
+ * | File    Options                                                          |
+ * |__________________________________________________________________________|
+ * |                                                                          |
+ * |                                   Duplicates: \"nr_dups\"                |
+ * |                                                                          |
+ * |                                                                          |
+ * |     [start scan]                                                         |
+ * |                                                                          |
+ * |                                                                          |
+ * |                                                                          |
+ * |                                                                          |
+ * | testing \"/path/to/file.file_extension\"                                 |
+ * |__________________________________________________________________________|
+ *
+ * Ideally, want to have a button for choosing starting directory for scan.
+ * Need to figure out how to create a window that shows the file system as
+ * a tree (perhaps there is a well-known built-in function that comes with
+ * GTK/GNOME that does all of that under the hood.
+ *
+ */
+
+class appWindow
+{
+	public:
+
+	appWindow();
+	~appWindow();
+
+	void create_default_window(void);
+
+	protected:
+
+/* [ File   Options  ...
+ *    v       v
+ *   Quit    Digests
+ *                 >
+ *                   MD5
+ *                   SHA256
+ *                   SHA512
+ */
+	GtkWidget *window;
+	GtkWidget *menu_bar;
+	GtkWidget *mitem_file; /* "File" */
+	GtkWidget *file_menu; /* The menu shell to which we attach the items (file_quit, etc) */
+	GtkWidget *file_quit; /* "File -> Quit" */
+	GtkWidget *mitem_options; /* "Options" */
+	GtkWidget *options_menu; /* Options menu shell */
+	GtkWidget *mitem_digests; /* "Options -> [ MD5 ] [ SHA256 ] [ SHA512 ]" */
+	GtkWidget *digests_menu; /* Hash digests menu shell */
+};
+
+#define WIN_DEFAULT_WIDTH 1000
+#define WIN_DEFAULT_HEIGHT 500
+#define WIN_BORDER_WIDTH 50
+
+appWindow::create_default_window(GtkApplication *app, gpointer data)
+{
+	this->window = gtk_application_window_new(app);
+	gtk_window_set_title(GTK_WINDOW(this->window), PROG_NAME " v"POLLUX_BUILD);
+	gtk_window_set_default_size(GTK_WINDOW(this->window), WIN_DEFAULT_WIDTH, WIN_DEFAULT_HEIGHT);
+	gtk_window_set_position(GTK_WINDOW(this->window), GTK_WIN_POS_CENTER);
+	gtk_container_set_border_width(GTK_CONTAINER(this->window), WIN_BORDER_WIDTH);
+
+	this->grid = gtk_grid_new();
+	gtk_container_add(GTK_CONTAINER(this->window), this->grid);
+}
+
+appWindow::window_add_menu_bar()
+{
+	this->menu_bar = gtk_menu_bar_new();
+	this->file_menu = gtk_menu_new();
+	this->options_menu = gtk_menu_new();
+	this->digests_menu = gtk_menu_new();
+
+	this->mitem_file = gtk_menu_item_new_with_label("File");
+	gtk_menu_item_set_submenu(GTK_MENU_ITEM(this->mitem_file), this->file_menu);
+	this->file_quit = gtk_menu_item_new_with_label("Quit");
+	gtk_menu_shell_append(GTK_MENU_SHELL(this->file_menu), this->file_quit);
+
+	this->mitem_options = gtk_menu_item_new_with_label("Options");
+	this->mitem_digests = gtk_menu_item_new_with_label("Digests");
+
+	gtk_menu_item_set_submenu(GTK_MENU_ITEM(this->mitem_options), this->options_menu);
+	gtk_menu_shell_append(GTK_MENU_SHELL(this->options_menu), this->mitem_digests);
+	gtk_menu_item_set_submenu(GTK_MENU_ITEM(this->mitem_digests), this->digests_menu);
+
+	for (gint i = 0; i < NR_DIGESTS; ++i)
+	{
+		menu_digests[i].menu_item = gtk_check_menu_item_new_with_label(menu_digests[i].name);
+		if (menu_digests[i].type == __DEFAULT_DIGEST)
+			gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(menu_digests[i].menu_item, TRUE);
+
+		g_signal_connect(G_OBJECT(menu_digests[i].menu_item), "toggled", G_CALLBACK(on_digest_select), (gpointer)&menu_digests[i].type);
+	}
+
+	gtk_menu_shell_append(GTK_MENU_SHELL(this->menu_bar), this->mitem_file);
+	gtk_menu_shell_append(GTK_MENU_SHELL(this->menu_bar), this->mitem_options);
+
+	gtk_grid_attach(GTK_GRID(this->grid), this->menu_bar, 0, 0, 1, 1);
+
+	return;
+}
+
 class fNode
 {
 	public:
