@@ -17,6 +17,10 @@
 #define PROG_NAME "Pollux"
 #define PROG_NAME_DBUS "org.weemonkey.pollux"
 #define POLLUX_BUILD "0.0.1"
+#define POLLUX_LOGO "./pollux_logo2.svg"
+#define PROG_COMMENTS "Pollux -- Find duplicate files based on hash digests"
+#define PROG_AUTHORS { "Gary Hannah", (gchar *)NULL }
+#define PROG_WEBSITE "https://127.0.0.1:80/?real=false&amp;fake=true"
 
 #define WIN_DEFAULT_WIDTH 1000
 #define WIN_DEFAULT_HEIGHT 350
@@ -62,6 +66,11 @@ static GtkWidget item_digest_sha256;
 static GtkWidget item_digest_sha512;
 
 static GtkWidget *button_start_scan;
+static GtkWidget *status_bar;
+static GtkWidget *image;
+static GdkPixbuf *icon_pixbuf;
+
+//static GtkWidget *about;
 
 static GList *list_digests;
 
@@ -809,23 +818,75 @@ create_menu_bar(void)
 	return;
 }
 
+
 void
 create_window(void)
 {
 	window = gtk_application_window_new(app);
-	gtk_window_set_title(GTK_WINDOW(window), PROG_NAME " build "POLLUX_BUILD);
+	gtk_window_set_title(GTK_WINDOW(window), PROG_NAME " v"POLLUX_BUILD);
 	gtk_window_set_default_size(GTK_WINDOW(window), WIN_DEFAULT_WIDTH, WIN_DEFAULT_HEIGHT);
 
 	grid = gtk_grid_new();
+	gtk_grid_set_column_spacing(GTK_GRID(grid), (guint)2);
 
 	create_menu_bar();
 
 	gtk_container_add(GTK_CONTAINER(window), grid);
 
+/*
+ * Load and keep our application icon in a pixbuf.
+ */
+	GError *error = NULL;
+
+#define APP_LOGO_WIDTH 240
+#define APP_LOGO_HEIGHT 240
+
+	icon_pixbuf = gdk_pixbuf_new_from_file_at_size(
+			POLLUX_LOGO,
+			APP_LOGO_WIDTH,
+			APP_LOGO_HEIGHT,
+			&error);
+
+	if (error)
+	{
+		g_error("Error loading application icon: (%s)\n", error->message);
+		g_error_free(error);
+	}
+
+	gtk_window_set_icon(GTK_WINDOW(window), icon_pixbuf);
+	g_object_unref(G_OBJECT(icon_pixbuf));
+
+	const gchar *authors[] = PROG_AUTHORS;
+	const gchar *title = "About " PROG_NAME;
+
+	gtk_show_about_dialog(
+			GTK_WINDOW(window),
+			"program-name", PROG_NAME,
+			"logo", icon_pixbuf,
+			"title", title,
+			"version", POLLUX_BUILD,
+			"comments", PROG_COMMENTS,
+			"authors", authors,
+			"website", PROG_WEBSITE,
+			NULL);
+#if 0
+	about = gtk_about_dialog_new();
+	gtk_about_dialog_set_program_name(GTK_ABOUT_DIALOG(about), PROG_NAME);
+	gtk_about_dialog_set_version(GTK_ABOUT_DIALOG(about), POLLUX_BUILD);
+	gtk_about_dialog_set_comments(GTK_ABOUT_DIALOG(about), PROG_COMMENTS);
+	gtk_about_dialog_set_authors(GTK_ABOUT_DIALOG(about), authors);
+	gtk_about_dialog_set_logo(GTK_ABOUT_DIALOG(about), icon_pixbuf);
+#endif
+
+	status_bar = gtk_statusbar_new();
+	guint ctx_id = gtk_statusbar_get_context_id(GTK_STATUSBAR(status_bar), (const gchar *)"Ready to scan...");
+	gtk_statusbar_push(GTK_STATUSBAR(status_bar), ctx_id, (const gchar *)"Ready to scan...");
+	
 	button_start_scan = gtk_button_new_with_label("Scan");
 
 /* gtk_grid_attach(GtkGrid *grid, GtkWidget *widget, gint left, gint top, gint width, gint height); */
-	gtk_grid_attach(GTK_GRID(grid), button_start_scan, 1, 1, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), button_start_scan, 10, 30, 2, 4);
+	gtk_grid_attach(GTK_GRID(grid), status_bar, 0, 250, 8, 100);
 	gtk_widget_show_all(window);
 
 	return;
