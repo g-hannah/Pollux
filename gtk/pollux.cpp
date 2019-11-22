@@ -15,7 +15,11 @@
 #include <gtk/gtk.h>
 
 #define PROG_NAME "Pollux"
+#define PROG_NAME_DBUS "org.weemonkey.pollux"
 #define POLLUX_BUILD "0.0.1"
+
+#define WIN_DEFAULT_WIDTH 1000
+#define WIN_DEFAULT_HEIGHT 350
 
 #define DIGEST() EVP_sha512()
 #define DIGEST_SIZE (EVP_MD_size(DIGEST()) * 2)
@@ -28,13 +32,9 @@ static sigjmp_buf __root_env__;
 
 typedef void (*gcallback_t)(GtkWidget *, gpointer);
 
-struct digest_options
-{
-	GtkWidget *menu_item;
-	gint type;
-	const gchar *name;
-	gcallback_t set_digest_func;
-};
+void on_digest_select(GtkWidget *, gpointer);
+void create_window(void);
+void create_menu_bar(void);
 
 enum
 {
@@ -46,15 +46,38 @@ enum
 
 #define __DEFAULT_DIGEST DIGEST_MD5
 
-static GtkWidget digest_md5;
-static GtkWidget digest_sha256;
-static GtkWidget digest_sha512;
+static GtkApplication *app;
+static GtkWidget *window;
+static GtkWidget *grid;
+static GtkWidget *menu_bar;
+static GtkWidget *file_menu;
+static GtkWidget *item_file;
+static GtkWidget *item_file_quit;
+static GtkWidget *options_menu;
+static GtkWidget *digests_menu;
+static GtkWidget *item_options;
+static GtkWidget *item_digests;
+static GtkWidget item_digest_md5;
+static GtkWidget item_digest_sha256;
+static GtkWidget item_digest_sha512;
 
-static struct digest_options menu_digests[NR_DIGESTS] =
+static GtkWidget *button_start_scan;
+
+static GList *list_digests;
+
+struct Digest
 {
-	{ &digest_md5, DIGEST_MD5, (const gchar *)"MD5", on_digest_select },
-	{ &digest_sha256, DIGEST_SHA256, (const gchar *)"SHA256", on_digest_select },
-	{ &digest_sha512, DIGEST_SHA512, (const gchar *)"SHA512", on_digest_select }
+	GtkWidget *item;
+	gint type;
+	const gchar *name;
+	gcallback_t func;
+};
+
+static struct Digest menu_digests[NR_DIGESTS] =
+{
+	{ &item_digest_md5, DIGEST_MD5, (const gchar *)"MD5", on_digest_select },
+	{ &item_digest_sha256, DIGEST_SHA256, (const gchar *)"SHA256", on_digest_select },
+	{ &item_digest_sha512, DIGEST_SHA512, (const gchar *)"SHA512", on_digest_select }
 };
 
 /*
@@ -79,88 +102,6 @@ static struct digest_options menu_digests[NR_DIGESTS] =
  * GTK/GNOME that does all of that under the hood.
  *
  */
-
-class appWindow
-{
-	public:
-
-	appWindow();
-	~appWindow();
-
-	void create_default_window(void);
-
-	protected:
-
-/* [ File   Options  ...
- *    v       v
- *   Quit    Digests
- *                 >
- *                   MD5
- *                   SHA256
- *                   SHA512
- */
-	GtkWidget *window;
-	GtkWidget *menu_bar;
-	GtkWidget *mitem_file; /* "File" */
-	GtkWidget *file_menu; /* The menu shell to which we attach the items (file_quit, etc) */
-	GtkWidget *file_quit; /* "File -> Quit" */
-	GtkWidget *mitem_options; /* "Options" */
-	GtkWidget *options_menu; /* Options menu shell */
-	GtkWidget *mitem_digests; /* "Options -> [ MD5 ] [ SHA256 ] [ SHA512 ]" */
-	GtkWidget *digests_menu; /* Hash digests menu shell */
-};
-
-#define WIN_DEFAULT_WIDTH 1000
-#define WIN_DEFAULT_HEIGHT 500
-#define WIN_BORDER_WIDTH 50
-
-appWindow::create_default_window(GtkApplication *app, gpointer data)
-{
-	this->window = gtk_application_window_new(app);
-	gtk_window_set_title(GTK_WINDOW(this->window), PROG_NAME " v"POLLUX_BUILD);
-	gtk_window_set_default_size(GTK_WINDOW(this->window), WIN_DEFAULT_WIDTH, WIN_DEFAULT_HEIGHT);
-	gtk_window_set_position(GTK_WINDOW(this->window), GTK_WIN_POS_CENTER);
-	gtk_container_set_border_width(GTK_CONTAINER(this->window), WIN_BORDER_WIDTH);
-
-	this->grid = gtk_grid_new();
-	gtk_container_add(GTK_CONTAINER(this->window), this->grid);
-}
-
-appWindow::window_add_menu_bar()
-{
-	this->menu_bar = gtk_menu_bar_new();
-	this->file_menu = gtk_menu_new();
-	this->options_menu = gtk_menu_new();
-	this->digests_menu = gtk_menu_new();
-
-	this->mitem_file = gtk_menu_item_new_with_label("File");
-	gtk_menu_item_set_submenu(GTK_MENU_ITEM(this->mitem_file), this->file_menu);
-	this->file_quit = gtk_menu_item_new_with_label("Quit");
-	gtk_menu_shell_append(GTK_MENU_SHELL(this->file_menu), this->file_quit);
-
-	this->mitem_options = gtk_menu_item_new_with_label("Options");
-	this->mitem_digests = gtk_menu_item_new_with_label("Digests");
-
-	gtk_menu_item_set_submenu(GTK_MENU_ITEM(this->mitem_options), this->options_menu);
-	gtk_menu_shell_append(GTK_MENU_SHELL(this->options_menu), this->mitem_digests);
-	gtk_menu_item_set_submenu(GTK_MENU_ITEM(this->mitem_digests), this->digests_menu);
-
-	for (gint i = 0; i < NR_DIGESTS; ++i)
-	{
-		menu_digests[i].menu_item = gtk_check_menu_item_new_with_label(menu_digests[i].name);
-		if (menu_digests[i].type == __DEFAULT_DIGEST)
-			gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(menu_digests[i].menu_item, TRUE);
-
-		g_signal_connect(G_OBJECT(menu_digests[i].menu_item), "toggled", G_CALLBACK(on_digest_select), (gpointer)&menu_digests[i].type);
-	}
-
-	gtk_menu_shell_append(GTK_MENU_SHELL(this->menu_bar), this->mitem_file);
-	gtk_menu_shell_append(GTK_MENU_SHELL(this->menu_bar), this->mitem_options);
-
-	gtk_grid_attach(GTK_GRID(this->grid), this->menu_bar, 0, 0, 1, 1);
-
-	return;
-}
 
 class fNode
 {
@@ -797,10 +738,111 @@ __attribute__((constructor)) __pollux_init(void)
 	exit(EXIT_FAILURE);
 }
 
+void
+on_digest_select(GtkWidget *widget, gpointer data)
+{
+	if (gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(widget)) == FALSE)
+		return;
+
+	struct Digest *dgst_ptr = NULL;
+/*
+ * Iterate over the linked list of struct Digest objects and
+ * change those that != WIDGET to FALSE.
+ */
+	for (GList *list_iter = g_list_first(list_digests); list_iter; list_iter = list_iter->next)
+	{
+		dgst_ptr = (struct Digest *)list_iter->data;
+
+		if (!dgst_ptr)
+		{
+			std::cerr << "*** list_iter->data is NULL ***" << std::endl;
+			continue;
+		}
+
+		if (dgst_ptr->item == widget)
+			continue;
+
+		gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(dgst_ptr->item), FALSE);
+	}
+}
+
+void
+create_menu_bar(void)
+{
+	menu_bar = gtk_menu_bar_new();
+	item_file = gtk_menu_item_new_with_label("File");
+	file_menu = gtk_menu_new();
+	item_file_quit = gtk_menu_item_new_with_label("Quit");
+
+	gtk_menu_item_set_submenu(GTK_MENU_ITEM(item_file), file_menu);
+	gtk_menu_shell_append(GTK_MENU_SHELL(file_menu), item_file_quit);
+
+	options_menu = gtk_menu_new();
+	item_options = gtk_menu_item_new_with_label("Options");
+	digests_menu = gtk_menu_new();
+	item_digests = gtk_menu_item_new_with_label("Digests");
+
+	gtk_menu_item_set_submenu(GTK_MENU_ITEM(item_options), options_menu);
+	gtk_menu_shell_append(GTK_MENU_SHELL(options_menu), item_digests);
+	gtk_menu_item_set_submenu(GTK_MENU_ITEM(item_digests), digests_menu);
+
+	list_digests = NULL;
+
+	for (gint i = 0; i < NR_DIGESTS; ++i)
+	{
+		menu_digests[i].item = gtk_check_menu_item_new_with_label(menu_digests[i].name);
+
+		if (menu_digests[i].type == __DEFAULT_DIGEST)
+			gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(menu_digests[i].item), TRUE);
+
+		g_signal_connect(menu_digests[i].item, "toggled", G_CALLBACK(on_digest_select), NULL);
+		gtk_menu_shell_append(GTK_MENU_SHELL(digests_menu), menu_digests[i].item);
+
+		list_digests = g_list_append(list_digests, (gpointer)&menu_digests[i]);
+	}
+
+	gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), item_file);
+	gtk_menu_shell_append(GTK_MENU_SHELL(menu_bar), item_options);
+
+	gtk_grid_attach(GTK_GRID(grid), menu_bar, 0, 0, 1, 1);
+
+	return;
+}
+
+void
+create_window(void)
+{
+	window = gtk_application_window_new(app);
+	gtk_window_set_title(GTK_WINDOW(window), PROG_NAME " build "POLLUX_BUILD);
+	gtk_window_set_default_size(GTK_WINDOW(window), WIN_DEFAULT_WIDTH, WIN_DEFAULT_HEIGHT);
+
+	grid = gtk_grid_new();
+
+	create_menu_bar();
+
+	gtk_container_add(GTK_CONTAINER(window), grid);
+
+	button_start_scan = gtk_button_new_with_label("Scan");
+
+/* gtk_grid_attach(GtkGrid *grid, GtkWidget *widget, gint left, gint top, gint width, gint height); */
+	gtk_grid_attach(GTK_GRID(grid), button_start_scan, 1, 1, 1, 1);
+	gtk_widget_show_all(window);
+
+	return;
+}
+
 int
 main(int argc, char *argv[])
 {
 	struct stat statb;
+	gint status;
+
+	app = gtk_application_new(PROG_NAME_DBUS, G_APPLICATION_FLAGS_NONE);
+	g_signal_connect(app, "activate", G_CALLBACK(create_window), NULL);
+	status = g_application_run(G_APPLICATION(app), argc, argv);
+	g_object_unref(G_OBJECT(app));
+#if 0
+	tree = new fTree();
 
 	std::cerr << "Pollux build " << POLLUX_BUILD << " (written in C++)" << std::endl;
 
@@ -810,7 +852,6 @@ main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
-	tree = new fTree();
 
 	lstat(argv[1], &statb);
 
@@ -835,8 +876,8 @@ main(int argc, char *argv[])
 
 	tree->show_duplicates();
 
-
 	out_release_mem:
+#endif
 
 	delete tree;
 	return 0;
