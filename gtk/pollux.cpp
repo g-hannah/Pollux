@@ -210,11 +210,18 @@ class dNode
 	gchar *name;
 
 	dNode();
+	~dNode();
 };
 
 dNode::dNode(void)
 {
 	this->name = NULL;
+}
+
+dNode::~dNode(void)
+{
+	if (this->name)
+		free(this->name);
 }
 
 /*
@@ -499,6 +506,14 @@ fTree::fTree(void)
 
 fTree::~fTree(void)
 {
+	for (std::map<gchar *,std::list<dNode> >::iterator map_iter = this->dup_list.begin(); map_iter != this->dup_list.end(); ++map_iter)
+	{
+		for (std::list<dNode>::iterator list_iter = map_iter->second.begin(); list_iter != map_iter->second.end(); ++list_iter)
+		{
+			if (list_iter->name)
+				free(list_iter->name);
+		}
+	}
 	this->dup_list.clear();
 
 	if (this->root)
