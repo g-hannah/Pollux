@@ -21,12 +21,13 @@
 #define PROG_COMMENTS "Pollux -- Find duplicate files based on hash digests"
 #define PROG_AUTHORS { "Gary Hannah", (gchar *)NULL }
 #define PROG_WEBSITE "https://127.0.0.1:80/?real=false&amp;fake=true"
+#define PROG_LICENCE "© Licenced under GNU Library GPLv2"
 
 #define WIN_DEFAULT_WIDTH 1000
 #define WIN_DEFAULT_HEIGHT 350
 
-#define DIGEST() EVP_sha512()
-#define DIGEST_SIZE (EVP_MD_size(DIGEST()) * 2)
+guint DIGEST_SIZE = 0;
+EVP_MD *__default_digest = (EVP_MD *)EVP_md5();
 
 static gchar *get_file_digest(gchar *) __nonnull((1)) __wur;
 
@@ -48,7 +49,27 @@ enum
 	NR_DIGESTS
 };
 
+#ifndef PATH_MAX
+# define PATH_MAX 1024
+#endif
+
+struct POLLUX_CTX
+{
+	gchar start_at[PATH_MAX];
+	gint digest_type;
+	gboolean scanning;
+	EVP_MD *digest_func;
+};
+
 #define __DEFAULT_DIGEST DIGEST_MD5
+
+struct POLLUX_CTX CTX =
+{
+	"",
+	__DEFAULT_DIGEST,
+	FALSE,
+	(EVP_MD *)NULL
+};
 
 static GtkApplication *app;
 static GtkWidget *window;
@@ -66,9 +87,11 @@ static GtkWidget item_digest_sha256;
 static GtkWidget item_digest_sha512;
 
 static GtkWidget *button_start_scan;
+static GtkWidget *button_choose_dir;
 static GtkWidget *status_bar;
 static GtkWidget *image;
 static GdkPixbuf *icon_pixbuf;
+static GtkWidget *frame;
 
 //static GtkWidget *about;
 
@@ -210,18 +233,11 @@ class dNode
 	gchar *name;
 
 	dNode();
-	~dNode();
 };
 
 dNode::dNode(void)
 {
 	this->name = NULL;
-}
-
-dNode::~dNode(void)
-{
-	if (this->name)
-		free(this->name);
 }
 
 /*
@@ -269,6 +285,7 @@ class fTree
 	public:
 
 	gsize nr_nodes;
+	std::map<gchar *,std::list<dNode> > dup_list;
 
 	fTree();
 	~fTree();
@@ -495,7 +512,6 @@ class fTree
 	}
 
 	fNode *root;
-	std::map<gchar *,std::list<dNode> > dup_list;
 };
 
 fTree::fTree(void)
@@ -511,7 +527,10 @@ fTree::~fTree(void)
 		for (std::list<dNode>::iterator list_iter = map_iter->second.begin(); list_iter != map_iter->second.end(); ++list_iter)
 		{
 			if (list_iter->name)
+			{
 				free(list_iter->name);
+				list_iter->name = NULL;
+			}
 		}
 	}
 	this->dup_list.clear();
@@ -617,7 +636,7 @@ get_file_digest(gchar *path)
 		goto fail;
 	}
 
-	if (1 != EVP_DigestInit_ex(ctx, DIGEST(), NULL))
+	if (1 != EVP_DigestInit_ex(ctx, CTX.digest_func, NULL))
 	{
 		std::cerr << "get_file_digest: failed to initialise MD CTX" << std::endl;
 		goto fail;
@@ -682,6 +701,8 @@ get_file_digest(gchar *path)
 	return NULL;
 }
 
+#define SCANNING_CTX_ID 1234u
+
 static gint
 scan_files(gchar *dir)
 {
@@ -698,8 +719,16 @@ scan_files(gchar *dir)
 		++len;
 	}
 
-	std::cerr << "Scanning directory \"" << dir << "\"" << std::endl;
+	static gchar __tmp[PATH_MAX];
+
+	sprintf(__tmp, "Scanning \"%s\"", dir);
+	guint ctx_id = gtk_statusbar_get_context_id(GTK_STATUSBAR(status_bar), __tmp);
+	gtk_statusbar_push(GTK_STATUSBAR(status_bar), ctx_id, __tmp);
+	//std::cerr << "Scanning directory \"" << dir << "\"" << std::endl;
 	dirp = fdopendir(open(dir, O_DIRECTORY));
+
+	if (!dirp)
+		return 0;
 
 	assert(dirp);
 
@@ -784,10 +813,118 @@ on_digest_select(GtkWidget *widget, gpointer data)
 		}
 
 		if (dgst_ptr->item == widget)
+		{
+			CTX.digest_type = dgst_ptr->type;
+
+			switch(CTX.digest_type)
+			{
+				case DIGEST_SHA256:
+					CTX.digest_func = (EVP_MD *)EVP_sha256();
+					DIGEST_SIZE = (EVP_MD_size(EVP_sha256()) * 2);
+					break;
+				case DIGEST_SHA512:
+					CTX.digest_func = (EVP_MD *)EVP_sha512();
+					DIGEST_SIZE = (EVP_MD_size(EVP_sha512()) * 2);
+					break;
+				default:
+					CTX.digest_func = (EVP_MD *)EVP_md5();
+					DIGEST_SIZE = (EVP_MD_size(EVP_md5()) * 2);
+			}
+
 			continue;
+		}
 
 		gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(dgst_ptr->item), FALSE);
 	}
+}
+
+void
+on_choose_directory(GtkWidget *widget, gpointer data)
+{
+	if (CTX.scanning == TRUE)
+		return;
+
+	gchar tmp[PATH_MAX];
+	gchar *p;
+
+	p = gtk_file_chooser_get_uri(GTK_FILE_CHOOSER(widget));
+	p += strlen("file://");
+	strcpy(CTX.start_at, p);
+
+#ifdef DEBUG
+	std::cout << "User chose " << gtk_file_chooser_get_uri(GTK_FILE_CHOOSER(widget)) << std::endl;
+#endif
+
+	return;
+}
+
+void
+on_start_scan(GtkWidget *widget, gpointer data)
+{
+	if (CTX.scanning == TRUE)
+		return;
+
+	gint retval;
+
+	tree = new fTree();
+
+	CTX.scanning = TRUE;
+	retval = scan_files(CTX.start_at);
+
+	if (retval == -1)
+	{
+		g_error("Scanning failed...");
+		delete tree;
+		return;
+	}
+
+	gtk_statusbar_remove_all(GTK_STATUSBAR(status_bar), SCANNING_CTX_ID);
+
+	GtkTreeStore *store;
+	GtkWidget *view;
+	GtkCellRenderer *renderer;
+	GtkTreeIter iter;
+	GtkTreeIter child;
+
+	renderer = gtk_cell_renderer_text_new();
+	g_assert(renderer);
+
+	store = gtk_tree_store_new(1, G_TYPE_STRING);
+	g_assert(store);
+
+	for (std::map<gchar *,std::list<dNode> >::iterator map_iter = tree->dup_list.begin(); map_iter != tree->dup_list.end(); ++map_iter)
+	{
+		gtk_tree_store_append(store, &iter, NULL);
+		gtk_tree_store_set(store, &iter, 0, map_iter->first, -1);
+
+		for (std::list<dNode>::iterator list_iter = map_iter->second.begin(); list_iter != map_iter->second.end(); ++list_iter)
+		{
+			gtk_tree_store_append(store, &child, &iter);
+			gtk_tree_store_set(store, &child, 0, list_iter->name, -1);
+		}
+	}
+
+	view = gtk_tree_view_new();
+	gtk_widget_set_size_request(view, 1450, 490);
+
+	gtk_tree_view_insert_column_with_attributes(GTK_TREE_VIEW(view), -1, "Hash Digest", renderer, "text", 0, NULL);
+
+	gtk_tree_view_set_model(GTK_TREE_VIEW(view), GTK_TREE_MODEL(store));
+	g_object_unref(store);
+
+	GtkWidget *result_window;
+	GtkWidget *_grid;
+
+	result_window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+	_grid = gtk_grid_new();
+
+	gtk_window_set_default_size(GTK_WINDOW(result_window), 1500, 500);
+	gtk_window_set_title(GTK_WINDOW(result_window), "Pollux -- Duplicate Files");
+
+	gtk_container_add(GTK_CONTAINER(result_window), _grid);
+	gtk_grid_attach(GTK_GRID(_grid), view, 1, 1, 1, 1);
+
+	gtk_widget_show_all(result_window);
 }
 
 void
@@ -840,9 +977,9 @@ create_window(void)
 	window = gtk_application_window_new(app);
 	gtk_window_set_title(GTK_WINDOW(window), PROG_NAME " v"POLLUX_BUILD);
 	gtk_window_set_default_size(GTK_WINDOW(window), WIN_DEFAULT_WIDTH, WIN_DEFAULT_HEIGHT);
+	gtk_window_set_position(GTK_WINDOW(window), GTK_WIN_POS_CENTER);
 
 	grid = gtk_grid_new();
-	gtk_grid_set_column_spacing(GTK_GRID(grid), (guint)2);
 
 	create_menu_bar();
 
@@ -871,6 +1008,7 @@ create_window(void)
 	gtk_window_set_icon(GTK_WINDOW(window), icon_pixbuf);
 	g_object_unref(G_OBJECT(icon_pixbuf));
 
+
 	const gchar *authors[] = PROG_AUTHORS;
 	const gchar *title = "About " PROG_NAME;
 
@@ -879,10 +1017,11 @@ create_window(void)
 			"program-name", PROG_NAME,
 			"logo", icon_pixbuf,
 			"title", title,
-			"version", POLLUX_BUILD,
+			"version", "Version "POLLUX_BUILD,
 			"comments", PROG_COMMENTS,
 			"authors", authors,
 			"website", PROG_WEBSITE,
+			"copyright", PROG_LICENCE,
 			NULL);
 #if 0
 	about = gtk_about_dialog_new();
@@ -898,10 +1037,28 @@ create_window(void)
 	gtk_statusbar_push(GTK_STATUSBAR(status_bar), ctx_id, (const gchar *)"Ready to scan...");
 	
 	button_start_scan = gtk_button_new_with_label("Scan");
+	g_signal_connect(button_start_scan, "clicked", G_CALLBACK(on_start_scan), NULL);
+
+	button_choose_dir = gtk_file_chooser_button_new("Select starting directory", GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER);
+	gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(button_choose_dir), getenv("HOME"));
+	g_signal_connect(button_choose_dir, "file-set", G_CALLBACK(on_choose_directory), NULL);
 
 /* gtk_grid_attach(GtkGrid *grid, GtkWidget *widget, gint left, gint top, gint width, gint height); */
-	gtk_grid_attach(GTK_GRID(grid), button_start_scan, 10, 30, 2, 4);
+
+	image = gtk_image_new_from_pixbuf(icon_pixbuf);
+
+	GtkWidget *label_choose_dir = gtk_label_new("Choose directory...");
+	frame = gtk_frame_new("-- Pollux & Castor --");
+
+	gtk_container_add(GTK_CONTAINER(frame), image);
+
+	gtk_grid_attach(GTK_GRID(grid), frame, 10, 2, 1, 1);
+	//gtk_grid_attach(GTK_GRID(grid), image, 4, 1, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), label_choose_dir, 4, 15, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), button_choose_dir, 4, 20, 1, 1);
+	gtk_grid_attach_next_to(GTK_GRID(grid), button_start_scan, button_choose_dir, GTK_POS_RIGHT, 1, 1);
 	gtk_grid_attach(GTK_GRID(grid), status_bar, 0, 250, 8, 100);
+
 	gtk_widget_show_all(window);
 
 	return;
@@ -912,6 +1069,11 @@ main(int argc, char *argv[])
 {
 	struct stat statb;
 	gint status;
+
+	init_openssl();
+
+	CTX.digest_func = (EVP_MD *)EVP_md5();
+	DIGEST_SIZE = (EVP_MD_size(EVP_md5()) * 2);
 
 	app = gtk_application_new(PROG_NAME_DBUS, G_APPLICATION_FLAGS_NONE);
 	g_signal_connect(app, "activate", G_CALLBACK(create_window), NULL);
