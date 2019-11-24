@@ -15,7 +15,7 @@
 #include <gtk/gtk.h>
 
 #define PROG_NAME "Pollux"
-#define PROG_NAME_DBUS "org.weemonkey.pollux"
+#define PROG_NAME_DBUS "org.gtk.pollux"
 #define POLLUX_BUILD "2.1.0"
 #define POLLUX_LOGO "./pollux_logo2.svg"
 #define PROG_COMMENTS "A file system scanner for duplicate files"
@@ -51,6 +51,9 @@ static GtkApplication *app;
 #define WIN_DEFAULT_WIDTH 500
 #define WIN_DEFAULT_HEIGHT 500
 static GtkWidget *window;
+
+#define MAIN_GRID_ROW_SPACING 2
+#define MAIN_GRID_COL_SPACING 10
 static GtkWidget *grid;
 
 static GtkWidget *menu_bar;
@@ -65,11 +68,15 @@ static GtkWidget item_digest_md5;
 static GtkWidget item_digest_sha256;
 static GtkWidget item_digest_sha512;
 
-static GtkWidget *stats_box;
 static GtkWidget *stats_nr_files;
+static GtkWidget *sep1;
 static GtkWidget *stats_nr_dups;
+static GtkWidget *sep2;
 static GtkWidget *stats_nr_bytes_total;
+static GtkWidget *sep3;
 static GtkWidget *stats_nr_bytes_wasted;
+static GtkWidget *sep4;
+
 static GtkListStore *stats_list;
 static GtkWidget *stats_view;
 static GtkCellRenderer *stats_renderer;
@@ -89,8 +96,6 @@ struct Stats
 
 static struct Stats _stats = {0};
 
-static GtkWidget *vseparator;
-
 /* runtime options */
 static GtkWidget *options_box;
 static GtkWidget no_hidden;
@@ -104,7 +109,14 @@ static GdkPixbuf *icon_pixbuf;
 #define PROG_ICON_SMALL_HEIGHT 48
 static GdkPixbuf *icon_pixbuf_small;
 
-static GtkWidget *separator_icon_below;
+static GtkWidget *list_box;
+
+static GtkWidget *hseparator;
+static GtkWidget *label_choose_dir;
+static GtkWidget *button_choose_dir;
+static GtkWidget *button_start_scan;
+static GtkWidget *image;
+static GtkWidget *image_small;
 
 #define SCROLLING_WINDOW_WIDTH 1650
 #define SCROLLING_WINDOW_HEIGHT 600
@@ -114,12 +126,6 @@ static GtkTreeStore *store;
 static GtkWidget *view;
 static GtkCellRenderer *renderer;
 
-static GtkWidget *button_start_scan;
-
-static GtkWidget *label_choose_dir;
-static GtkWidget *button_choose_dir;
-static GtkWidget *image;
-static GtkWidget *image_small;
 
 static GList *list_digests;
 
@@ -138,15 +144,14 @@ struct Grid_Attachment
 	gint position;
 };
 
-#define NR_GRID_ATTACHMENTS 6
+#define NR_GRID_ATTACHMENTS 5
 struct Grid_Attachment grid_attachments[NR_GRID_ATTACHMENTS] =
 {
 	{ &image, PROG_ICON_WIDTH, PROG_ICON_HEIGHT, PROG_ICON_LEFT, PROG_ICON_TOP, 1, 1, FALSE, NULL, 0 },
 	{ &label_choose_dir, 10, 5, 2, 20, 1, 1, FALSE, NULL, 0 },
 	{ &button_choose_dir, 10, 5, 2, 21, 1, 1, FALSE, NULL 0 },
 	{ &button_start_scan, 5, 5, 3, 21, 1, 1, TRUE, &button_choose_dir, GTK_POS_RIGHT },
-	{ &vseparator, 1, 20, 50, 2, 1, 1, FALSE, NULL, 0 }
-	{ &options_box, 20, 30, 51, 2, 1, 1, FALSE, NULL, 0 },
+	{ &options_box, 20, 30, 51, 2, 1, 1, FALSE, NULL, 0 }
 };
 #endif
 
@@ -1185,6 +1190,9 @@ create_window(void)
 
 	grid = gtk_grid_new();
 	gtk_grid_set_row_homogeneous(GTK_GRID(grid), FALSE);
+	gtk_grid_set_row_spacing(GTK_GRID(grid), MAIN_GRID_ROW_SPACING);
+	gtk_grid_set_column_homogeneous(GTK_GRID(grid), FALSE);
+	gtk_grid_set_column_spacing(GTK_GRID(grid), MAIN_GRID_COL_SPACING);
 	gtk_widget_set_size_request(grid, WIN_DEFAULT_WIDTH, WIN_DEFAULT_HEIGHT);
 
 	create_menu_bar();
@@ -1242,6 +1250,31 @@ create_window(void)
 	image = gtk_image_new_from_pixbuf(icon_pixbuf);
 	image_small = gtk_image_new_from_pixbuf(icon_pixbuf_small);
 
+	list_box = gtk_list_box_new();
+	gtk_widget_set_size_request(list_box, 100, 100);
+
+	hseparator = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+	gtk_widget_set_size_request(hseparator, 1, 1);
+#if 0
+	stats_nr_files = gtk_label_new("#Files");
+	stats_nr_dups = gtk_label_new("#Dups");
+	stats_nr_bytes_total = gtk_label_new("#Memory");
+	stats_nr_bytes_wasted = gtk_label_new("#Wasted");
+
+	sep1 = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+	sep2 = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+	sep3 = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+	sep4 = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+
+	gtk_list_box_prepend(GTK_LIST_BOX(list_box), stats_nr_files);
+	gtk_list_box_prepend(GTK_LIST_BOX(list_box), sep1);
+	gtk_list_box_prepend(GTK_LIST_BOX(list_box), stats_nr_dups);
+	gtk_list_box_prepend(GTK_LIST_BOX(list_box), sep2);
+	gtk_list_box_prepend(GTK_LIST_BOX(list_box), stats_nr_bytes_total);
+	gtk_list_box_prepend(GTK_LIST_BOX(list_box), sep3);
+	gtk_list_box_prepend(GTK_LIST_BOX(list_box), stats_nr_bytes_wasted);
+	gtk_list_box_prepend(GTK_LIST_BOX(list_box), sep4);
+#endif
 /*
  * Create button to start scan that has a small
  * version of application logo contained within.
@@ -1262,17 +1295,14 @@ create_window(void)
 	g_signal_connect(button_choose_dir, "file-set", G_CALLBACK(on_choose_directory), NULL);
 
 /*
- * Create a vertical separator to place to the right
- * of the larger application logo in the main window.
- */
-	vseparator = gtk_separator_new(GTK_ORIENTATION_VERTICAL);
-
-/*
  * Create a box of check buttons for runtime options
  * which will be placed just to the right of the
  * vertical separator.
  */
 	options_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+	gtk_box_set_homogeneous(GTK_BOX(options_box), FALSE);
+	gtk_box_set_spacing(GTK_BOX(options_box), 2);
+
 	for (gint i = 0; i < NR_OPTIONS; ++i)
 	{
 		options[i].widget = gtk_check_button_new_with_label(options[i].name);
@@ -1281,11 +1311,12 @@ create_window(void)
 	}
 
 /* gtk_grid_attach(GtkGrid *grid, GtkWidget *widget, gint left, gint top, gint width, gint height); */
-	gtk_grid_attach(GTK_GRID(grid), image, 10, 1, 1, 1);
-	gtk_grid_attach_next_to(GTK_GRID(grid), vseparator, image, GTK_POS_RIGHT, 1, 1);
-	gtk_grid_attach(GTK_GRID(grid), options_box, 20, 3, 1, 1);
-	gtk_grid_attach(GTK_GRID(grid), label_choose_dir, 20, 4, 1, 1);
-	gtk_grid_attach(GTK_GRID(grid), button_choose_dir, 20, 5, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), image, 2, 0, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), list_box, 0, 1, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), hseparator, 2, 1, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), options_box, 2, 2, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), label_choose_dir, 2, 3, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), button_choose_dir, 2, 4, 1, 1);
 	gtk_grid_attach_next_to(GTK_GRID(grid), button_start_scan, button_choose_dir, GTK_POS_RIGHT, 1, 1);
 
 	gtk_widget_show_all(window);
