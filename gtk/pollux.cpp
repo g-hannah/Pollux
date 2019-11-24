@@ -818,8 +818,6 @@ get_file_digest(gchar *path)
 	return NULL;
 }
 
-#define SCANNING_CTX_ID 1234u
-
 static gint
 scan_files(gchar *dir)
 {
