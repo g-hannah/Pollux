@@ -26,6 +26,10 @@
 #define likely(x) __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
 
+#ifndef PATH_MAX
+# define PATH_MAX 1024
+#endif
+
 guint DIGEST_SIZE = 0;
 EVP_MD *__default_digest = (EVP_MD *)EVP_md5();
 
@@ -38,8 +42,113 @@ static sigjmp_buf __root_env__;
 typedef void (*gcallback_t)(GtkWidget *, gpointer);
 
 void on_digest_select(GtkWidget *, gpointer);
+void on_option_select(GtkWidget *, gpointer);
 void create_window(void);
 void create_menu_bar(void);
+
+static GtkApplication *app;
+
+#define WIN_DEFAULT_WIDTH 500
+#define WIN_DEFAULT_HEIGHT 500
+static GtkWidget *window;
+static GtkWidget *grid;
+
+static GtkWidget *menu_bar;
+static GtkWidget *file_menu;
+static GtkWidget *item_file;
+static GtkWidget *item_file_quit;
+static GtkWidget *options_menu;
+static GtkWidget *digests_menu;
+static GtkWidget *item_options;
+static GtkWidget *item_digests;
+static GtkWidget item_digest_md5;
+static GtkWidget item_digest_sha256;
+static GtkWidget item_digest_sha512;
+
+static GtkWidget *stats_box;
+static GtkWidget *stats_nr_files;
+static GtkWidget *stats_nr_dups;
+static GtkWidget *stats_nr_bytes_total;
+static GtkWidget *stats_nr_bytes_wasted;
+static GtkListStore *stats_list;
+static GtkWidget *stats_view;
+static GtkCellRenderer *stats_renderer;
+
+#define INC_NR_FILES() (++_stats.nr_files)
+#define INC_NR_DUPS() (++_stats.nr_dups)
+#define INC_BYTES_TOTAL(b) (_stats.nr_bytes_total += (b))
+#define INC_BYTES_WASTED(b) (_stats.nr_bytes_wasted += (b))
+
+struct Stats
+{
+	guint nr_files;
+	guint nr_dups;
+	guint nr_bytes_total;
+	guint nr_bytes_wasted;
+};
+
+static struct Stats _stats = {0};
+
+static GtkWidget *vseparator;
+
+/* runtime options */
+static GtkWidget *options_box;
+static GtkWidget no_hidden;
+static GtkWidget delete_all;
+
+#define PROG_ICON_WIDTH 178
+#define PROG_ICON_HEIGHT 178
+static GdkPixbuf *icon_pixbuf;
+
+#define PROG_ICON_SMALL_WIDTH 48
+#define PROG_ICON_SMALL_HEIGHT 48
+static GdkPixbuf *icon_pixbuf_small;
+
+static GtkWidget *separator_icon_below;
+
+#define SCROLLING_WINDOW_WIDTH 1650
+#define SCROLLING_WINDOW_HEIGHT 600
+static GtkWidget *results_window;
+static GtkWidget *scrolling;
+static GtkTreeStore *store;
+static GtkWidget *view;
+static GtkCellRenderer *renderer;
+
+static GtkWidget *button_start_scan;
+
+static GtkWidget *label_choose_dir;
+static GtkWidget *button_choose_dir;
+static GtkWidget *image;
+static GtkWidget *image_small;
+
+static GList *list_digests;
+
+#if 0
+struct Grid_Attachment
+{
+	GtkWidget *widget;
+	gint width;
+	gint height;
+	gint left;
+	gint top;
+	gint grid_width;
+	gint grid_height;
+	gboolean next_to;
+	GtkWidget *sibling;
+	gint position;
+};
+
+#define NR_GRID_ATTACHMENTS 6
+struct Grid_Attachment grid_attachments[NR_GRID_ATTACHMENTS] =
+{
+	{ &image, PROG_ICON_WIDTH, PROG_ICON_HEIGHT, PROG_ICON_LEFT, PROG_ICON_TOP, 1, 1, FALSE, NULL, 0 },
+	{ &label_choose_dir, 10, 5, 2, 20, 1, 1, FALSE, NULL, 0 },
+	{ &button_choose_dir, 10, 5, 2, 21, 1, 1, FALSE, NULL 0 },
+	{ &button_start_scan, 5, 5, 3, 21, 1, 1, TRUE, &button_choose_dir, GTK_POS_RIGHT },
+	{ &vseparator, 1, 20, 50, 2, 1, 1, FALSE, NULL, 0 }
+	{ &options_box, 20, 30, 51, 2, 1, 1, FALSE, NULL, 0 },
+};
+#endif
 
 enum
 {
@@ -63,6 +172,30 @@ struct Result_Columns result_columns[NR_COLUMNS] =
 	{ "       Modified       " }
 };
 
+#define OPT_NO_HIDDEN 0x1
+#define OPT_DELETE_ALL 0x2
+
+enum
+{
+	OPTION_NO_HIDDEN = 0,
+	OPTION_DELETE_ALL,
+	NR_OPTIONS
+};
+
+struct Runtime_Option
+{
+	GtkWidget *widget;
+	gint option;
+	const gchar *name;
+	gcallback_t func;
+};
+
+struct Runtime_Option options[NR_OPTIONS] =
+{
+	{ &no_hidden, OPTION_NO_HIDDEN, "Ignore hidden files", on_option_select },
+	{ &delete_all, OPTION_DELETE_ALL, "Delete all (no prompt)", on_option_select }
+};
+
 enum
 {
 	DIGEST_MD5,
@@ -70,86 +203,6 @@ enum
 	DIGEST_SHA512,
 	NR_DIGESTS
 };
-
-#ifndef PATH_MAX
-# define PATH_MAX 1024
-#endif
-
-struct POLLUX_CTX
-{
-	gchar start_at[PATH_MAX];
-	gint digest_type;
-	gboolean scanning;
-	EVP_MD *digest_func;
-};
-
-#define __DEFAULT_DIGEST DIGEST_MD5
-
-struct POLLUX_CTX CTX =
-{
-	"",
-	__DEFAULT_DIGEST,
-	FALSE,
-	(EVP_MD *)NULL
-};
-
-static GtkApplication *app;
-
-#define WIN_DEFAULT_WIDTH 500
-#define WIN_DEFAULT_HEIGHT 500
-static GtkWidget *window;
-static GtkWidget *grid;
-
-static GtkWidget *menu_bar;
-static GtkWidget *file_menu;
-static GtkWidget *item_file;
-static GtkWidget *item_file_quit;
-static GtkWidget *options_menu;
-static GtkWidget *digests_menu;
-static GtkWidget *item_options;
-static GtkWidget *item_digests;
-static GtkWidget item_digest_md5;
-static GtkWidget item_digest_sha256;
-static GtkWidget item_digest_sha512;
-
-#define FRAME_LEFT 0
-#define FRAME_TOP 0
-#define FRAME_WIDTH 500
-#define FRAME_HEIGHT 500
-static GtkWidget *frame;
-static GtkWidget *frame_grid;
-
-#define PROG_ICON_LEFT 1
-#define PROG_ICON_TOP 1
-#define PROG_ICON_WIDTH 320
-#define PROG_ICON_HEIGHT 320
-static GdkPixbuf *icon_pixbuf;
-
-#define PROG_ICON_SMALL_LEFT 1
-#define PROG_ICON_SMALL_TOP 1
-#define PROG_ICON_SMALL_WIDTH 48
-#define PROG_ICON_SMALL_HEIGHT 48
-static GdkPixbuf *icon_pixbuf_small;
-
-static GtkWidget *separator_icon_below;
-
-#define SCROLLING_WINDOW_LEFT 300
-#define SCROLLING_WINDOW_TOP 0
-#define SCROLLING_WINDOW_WIDTH 1650
-#define SCROLLING_WINDOW_HEIGHT 600
-static GtkWidget *results_window;
-static GtkWidget *scrolling;
-static GtkTreeStore *store;
-static GtkWidget *view;
-static GtkCellRenderer *renderer;
-
-static GtkWidget *button_start_scan;
-
-static GtkWidget *label_choose_dir;
-static GtkWidget *button_choose_dir;
-static GtkWidget *image;
-
-static GList *list_digests;
 
 struct Digest
 {
@@ -164,6 +217,26 @@ static struct Digest menu_digests[NR_DIGESTS] =
 	{ &item_digest_md5, DIGEST_MD5, (const gchar *)"MD5", on_digest_select },
 	{ &item_digest_sha256, DIGEST_SHA256, (const gchar *)"SHA256", on_digest_select },
 	{ &item_digest_sha512, DIGEST_SHA512, (const gchar *)"SHA512", on_digest_select }
+};
+
+struct POLLUX_CTX
+{
+	gchar start_at[PATH_MAX];
+	gint digest_type;
+	guint runtime_options;
+	gboolean scanning;
+	EVP_MD *digest_func;
+};
+
+#define __DEFAULT_DIGEST DIGEST_MD5
+
+struct POLLUX_CTX CTX =
+{
+	"",
+	__DEFAULT_DIGEST,
+	~(1u),
+	FALSE,
+	(EVP_MD *)NULL
 };
 
 /*
@@ -352,6 +425,9 @@ class fTree
 		lstat(name, &statb);
 		size = statb.st_size;
 
+		INC_NR_FILES();
+		INC_BYTES_TOTAL(size);
+
 		if (!this->root)
 		{
 			this->root = new fNode();
@@ -447,6 +523,9 @@ class fTree
 
 				if (!memcmp(cur_digest, n->digest, DIGEST_SIZE))
 				{
+					INC_NR_FILES();
+					INC_BYTES_WASTED(size);
+
 					if (n->been_added() == false)
 					{
 #ifdef DEBUG
@@ -481,6 +560,8 @@ class fTree
 
 						if (n->bucket_contains(cur_digest, DIGEST_SIZE))
 						{
+							INC_NR_FILES();
+							INC_BYTES_WASTED(size);
 #ifdef DEBUG
 							std::cerr << "Found match in bucket. Inserting duplicate file to linked list" << std::endl;
 #endif
@@ -841,6 +922,42 @@ __attribute__((constructor)) __pollux_init(void)
 }
 
 void
+on_option_select(GtkWidget *widget, gpointer data)
+{
+	if (CTX.scanning == TRUE)
+		return;
+
+	gint _opt = *(gint *)data;
+	gboolean _active = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget));
+
+	switch(_opt)
+	{
+		case OPTION_NO_HIDDEN:
+			if (_active == TRUE)
+				CTX.runtime_options |= OPT_NO_HIDDEN;
+			else
+				CTX.runtime_options &= ~(OPT_NO_HIDDEN);
+#ifdef DEBUG
+				std::cerr << "option no hidden toggled" << std::endl;
+#endif
+			break;
+		case OPTION_DELETE_ALL:
+			if (_active == TRUE)
+				CTX.runtime_options |= OPT_DELETE_ALL;
+			else
+				CTX.runtime_options &= ~(OPT_DELETE_ALL);
+			break;
+#ifdef DEBUG
+				std::cerr << "option delete all toggled" << std::endl;
+#endif
+		default:
+			break;
+	}
+
+	return;
+}
+
+void
 on_digest_select(GtkWidget *widget, gpointer data)
 {
 	if (gtk_check_menu_item_get_active(GTK_CHECK_MENU_ITEM(widget)) == FALSE)
@@ -993,7 +1110,7 @@ on_start_scan(GtkWidget *widget, gpointer data)
 	gtk_tree_view_set_model(GTK_TREE_VIEW(view), GTK_TREE_MODEL(store));
 	g_object_unref(G_OBJECT(store));
 
-	g_object_set(G_OBJECT(renderer), "cell-background", "Grey", "cell-background-set", TRUE, NULL);
+	g_object_set(G_OBJECT(renderer), "cell-background", "LightGrey", "cell-background-set", TRUE, NULL);
 
 	for (gint i = 0; i < NR_COLUMNS; ++i)
 	{
@@ -1010,6 +1127,7 @@ on_start_scan(GtkWidget *widget, gpointer data)
 	gtk_container_add(GTK_CONTAINER(results_window), scrolling);
 
 	delete tree;
+	CTX.scanning = FALSE;
 
 	gtk_widget_show_all(results_window);
 }
@@ -1066,6 +1184,7 @@ create_window(void)
 	gtk_window_set_position(GTK_WINDOW(window), GTK_WIN_POS_CENTER);
 
 	grid = gtk_grid_new();
+	gtk_grid_set_row_homogeneous(GTK_GRID(grid), FALSE);
 	gtk_widget_set_size_request(grid, WIN_DEFAULT_WIDTH, WIN_DEFAULT_HEIGHT);
 
 	create_menu_bar();
@@ -1120,33 +1239,54 @@ create_window(void)
 			"copyright", PROG_LICENCE,
 			NULL);
 
-	image = gtk_image_new_from_pixbuf(icon_pixbuf_small);
+	image = gtk_image_new_from_pixbuf(icon_pixbuf);
+	image_small = gtk_image_new_from_pixbuf(icon_pixbuf_small);
 
+/*
+ * Create button to start scan that has a small
+ * version of application logo contained within.
+ */
 	button_start_scan = gtk_button_new();
-	gtk_container_add(GTK_CONTAINER(button_start_scan), image);
+	gtk_container_add(GTK_CONTAINER(button_start_scan), image_small);
 	g_signal_connect(button_start_scan, "clicked", G_CALLBACK(on_start_scan), NULL);
 
+/*
+ * Create a button for choosing the directory
+ * to start the scan in (on clicking, a menu
+ * appears with a list of directories to choose
+ * from.
+ */
+	label_choose_dir = gtk_label_new("Choose directory...");
 	button_choose_dir = gtk_file_chooser_button_new("Select starting directory", GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER);
 	gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(button_choose_dir), getenv("HOME"));
 	g_signal_connect(button_choose_dir, "file-set", G_CALLBACK(on_choose_directory), NULL);
 
-	label_choose_dir = gtk_label_new("Choose directory...");
-	frame = gtk_frame_new("     Pollux     ");
-	gtk_widget_set_size_request(frame, FRAME_WIDTH, FRAME_HEIGHT);
+/*
+ * Create a vertical separator to place to the right
+ * of the larger application logo in the main window.
+ */
+	vseparator = gtk_separator_new(GTK_ORIENTATION_VERTICAL);
 
-	frame_grid = gtk_grid_new();
-	gtk_widget_set_size_request(frame_grid, FRAME_WIDTH, FRAME_HEIGHT);
-
-	gtk_container_add(GTK_CONTAINER(frame), frame_grid);
-	gtk_grid_attach(GTK_GRID(grid), frame, FRAME_LEFT, FRAME_TOP, 1, 1);
-
-	separator_icon_below = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+/*
+ * Create a box of check buttons for runtime options
+ * which will be placed just to the right of the
+ * vertical separator.
+ */
+	options_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+	for (gint i = 0; i < NR_OPTIONS; ++i)
+	{
+		options[i].widget = gtk_check_button_new_with_label(options[i].name);
+		g_signal_connect(options[i].widget, "toggled", G_CALLBACK(options[i].func), &options[i].option);
+		gtk_box_pack_start(GTK_BOX(options_box), options[i].widget, FALSE, FALSE, 10);
+	}
 
 /* gtk_grid_attach(GtkGrid *grid, GtkWidget *widget, gint left, gint top, gint width, gint height); */
-	gtk_grid_attach(GTK_GRID(frame_grid), separator_icon_below, 1, 2, 1, 1);
-	gtk_grid_attach(GTK_GRID(frame_grid), label_choose_dir, 1, 3, 1, 1);
-	gtk_grid_attach(GTK_GRID(frame_grid), button_choose_dir, 1, 4, 1, 1);
-	gtk_grid_attach_next_to(GTK_GRID(frame_grid), button_start_scan, button_choose_dir, GTK_POS_RIGHT, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), image, 10, 1, 1, 1);
+	gtk_grid_attach_next_to(GTK_GRID(grid), vseparator, image, GTK_POS_RIGHT, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), options_box, 20, 3, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), label_choose_dir, 20, 4, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), button_choose_dir, 20, 5, 1, 1);
+	gtk_grid_attach_next_to(GTK_GRID(grid), button_start_scan, button_choose_dir, GTK_POS_RIGHT, 1, 1);
 
 	gtk_widget_show_all(window);
 
