@@ -244,29 +244,6 @@ struct POLLUX_CTX CTX =
 	(EVP_MD *)NULL
 };
 
-/*
- * ___________________________________________________________________________
- * | File    Options                                                          |
- * |__________________________________________________________________________|
- * |                                                                          |
- * |                                   Duplicates: \"nr_dups\"                |
- * |                                                                          |
- * |                                                                          |
- * |     [start scan]                                                         |
- * |                                                                          |
- * |                                                                          |
- * |                                                                          |
- * |                                                                          |
- * | testing \"/path/to/file.file_extension\"                                 |
- * |__________________________________________________________________________|
- *
- * Ideally, want to have a button for choosing starting directory for scan.
- * Need to figure out how to create a window that shows the file system as
- * a tree (perhaps there is a well-known built-in function that comes with
- * GTK/GNOME that does all of that under the hood.
- *
- */
-
 class fNode
 {
 	public:
