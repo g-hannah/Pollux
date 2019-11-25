@@ -1051,9 +1051,10 @@ on_row_toggled(GtkCellRendererToggle *cell, gchar *path, gpointer data)
 
 			std::cerr << "Selected all files with digest \"" << _digest << "\":" << std::endl;
 
+			gtk_tree_path_down(_path);
+
 			while (true)
 			{
-				gtk_tree_path_next(_path);
 				path = gtk_tree_path_to_string(_path);
 				valid = gtk_tree_model_get_iter_from_string(model, &iter, path);
 
@@ -1063,6 +1064,7 @@ on_row_toggled(GtkCellRendererToggle *cell, gchar *path, gpointer data)
 				gtk_tree_model_get(model, &iter, COL_PATH, &filepath, -1);
 
 				std::cerr << filepath << std::endl;
+				gtk_tree_path_next(_path);
 			}
 
 			std::cerr << std::endl;
@@ -1171,6 +1173,7 @@ on_start_scan(GtkWidget *widget, gpointer data)
 	renderer = gtk_cell_renderer_text_new();
 	toggle_renderer = gtk_cell_renderer_toggle_new();
 
+	g_object_set(G_OBJECT(toggle_renderer), "activatable", TRUE, NULL);
 	g_signal_connect(toggle_renderer, "toggled", G_CALLBACK(on_row_toggled), (gpointer)store);
 
 	gtk_tree_view_set_model(GTK_TREE_VIEW(view), GTK_TREE_MODEL(store));
@@ -1187,7 +1190,6 @@ on_start_scan(GtkWidget *widget, gpointer data)
  * it is the row with the digest, meaning we select
  * all the rows that are children of it.
  */
-	g_object_set(G_OBJECT(toggle_renderer), "activatable", FALSE, NULL);
 	gtk_tree_view_insert_column_with_attributes(GTK_TREE_VIEW(view),
 			-1, result_columns[0].name, toggle_renderer, 0, NULL);
 
