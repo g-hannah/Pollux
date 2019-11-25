@@ -213,6 +213,10 @@ struct POLLUX_CTX
 	EVP_MD *digest_func;
 };
 
+#define option_set(o) (CTX.runtime_options & (o))
+#define set_option(o) (CTX.runtime_options |= (o))
+#define unset_option(o) (CTX.runtime_options &= ~(o))
+
 #define __DEFAULT_DIGEST DIGEST_MD5
 
 struct POLLUX_CTX CTX =
