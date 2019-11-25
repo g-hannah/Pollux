@@ -111,7 +111,6 @@ static GdkPixbuf *icon_pixbuf_small;
 
 static GtkWidget *list_box;
 
-static GtkWidget *hseparator;
 static GtkWidget *label_choose_dir;
 static GtkWidget *button_choose_dir;
 static GtkWidget *button_start_scan;
@@ -1039,15 +1038,21 @@ on_row_toggled(GtkCellRendererToggle *cell, gchar *path, gpointer data)
 		if (_all == TRUE)
 		{
 			GtkTreeIter child;
+			GtkTreePath *_path;
+			gchar *_digest;
 			gchar *filepath;
 
 			valid = TRUE;
 
-			std::cerr << "Selected all files:\n" << std::endl;
+			gtk_tree_model_get(model, &iter, COL_PATH, &_digest, -1);
+			_path = gtk_tree_path_new_from_string(path);
+
+			std::cerr << "Selected all files with digest \"" << _digest << "\":" << std::endl;
 
 			while (true)
 			{
-				gtk_tree_path_next(path);
+				gtk_tree_path_next(_path);
+				path = gtk_tree_path_to_string(_path);
 				valid = gtk_tree_model_get_iter_from_string(model, &iter, path);
 
 				if (!valid)
@@ -1184,12 +1189,10 @@ on_start_scan(GtkWidget *widget, gpointer data)
 	gtk_tree_view_insert_column_with_attributes(GTK_TREE_VIEW(view),
 			-1, result_columns[0].name, toggle_renderer, 0, NULL);
 
-	g_object_set(G_OBJECT(renderer), "visible", FALSE, NULL);
-
-	gtk_tree_view_insert_column_with_attributes(GTK_TREE_VIEW(view),
-			-1, result_columns[1].name, renderer, 1, NULL);
-
-	g_object_set(G_OBJECT(renderer), "visible", TRUE, NULL);
+/*
+ * Do not need to add second column to the view because we don't
+ * want it to be visible!!
+ */
 
 	for (gint i = 2; i < NR_COLUMNS; ++i)
 	{
@@ -1327,8 +1330,6 @@ create_window(void)
 	list_box = gtk_list_box_new();
 	gtk_widget_set_size_request(list_box, 100, 100);
 
-	hseparator = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
-	gtk_widget_set_size_request(hseparator, 1, 1);
 #if 0
 	stats_nr_files = gtk_label_new("#Files");
 	stats_nr_dups = gtk_label_new("#Dups");
@@ -1387,7 +1388,6 @@ create_window(void)
 /* gtk_grid_attach(GtkGrid *grid, GtkWidget *widget, gint left, gint top, gint width, gint height); */
 	gtk_grid_attach(GTK_GRID(grid), image, 2, 0, 1, 1);
 	gtk_grid_attach(GTK_GRID(grid), list_box, 0, 1, 1, 1);
-	gtk_grid_attach(GTK_GRID(grid), hseparator, 2, 1, 1, 1);
 	gtk_grid_attach(GTK_GRID(grid), options_box, 2, 2, 1, 1);
 	gtk_grid_attach(GTK_GRID(grid), label_choose_dir, 2, 3, 1, 1);
 	gtk_grid_attach(GTK_GRID(grid), button_choose_dir, 2, 4, 1, 1);
