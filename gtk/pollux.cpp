@@ -1116,7 +1116,7 @@ on_start_scan(GtkWidget *widget, gpointer data)
 	{
 		check_button = gtk_check_button_new_with_label("Select all");
 		g_assert(check_button);
-		g_signal_connect(check_button, "toggled", G_CALLBACK(on_row_toggle), (gpointer)store);
+		g_signal_connect(check_button, "toggled", G_CALLBACK(on_row_toggled), (gpointer)store);
 
 		gtk_tree_store_append(store, &iter, NULL);
 		gtk_tree_store_set(store, &iter,
@@ -1152,7 +1152,7 @@ on_start_scan(GtkWidget *widget, gpointer data)
 
 			check_button = gtk_check_button_new_with_label("Select file");
 			g_assert(check_button);
-			g_signal_connect(check_button, "toggled", G_CALLBACK(on_row_toggle), (gpointer)store);
+			g_signal_connect(check_button, "toggled", G_CALLBACK(on_row_toggled), (gpointer)store);
 
 			gtk_tree_store_append(store, &child, &iter);
 
