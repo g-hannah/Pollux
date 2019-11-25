@@ -52,7 +52,7 @@ static GtkApplication *app;
 #define WIN_DEFAULT_HEIGHT 400
 static GtkWidget *window;
 
-#define MAIN_GRID_ROW_SPACING 1
+#define MAIN_GRID_ROW_SPACING 0
 #define MAIN_GRID_COL_SPACING 8
 static GtkWidget *grid;
 
@@ -105,8 +105,8 @@ static GtkWidget delete_all;
 #define PROG_ICON_HEIGHT 178
 static GdkPixbuf *icon_pixbuf;
 
-#define PROG_ICON_SMALL_WIDTH 48
-#define PROG_ICON_SMALL_HEIGHT 48
+#define PROG_ICON_SMALL_WIDTH 30
+#define PROG_ICON_SMALL_HEIGHT 30
 static GdkPixbuf *icon_pixbuf_small;
 
 static GtkWidget *list_box;
@@ -117,6 +117,8 @@ static GtkWidget *button_start_scan;
 static GtkWidget *image;
 static GtkWidget *image_small;
 
+static GtkWidget *status_bar;
+
 #define SCROLLING_WINDOW_WIDTH 1650
 #define SCROLLING_WINDOW_HEIGHT 600
 static GtkWidget *results_window;
@@ -126,7 +128,6 @@ static GtkWidget *view;
 static GtkCellRenderer *renderer;
 static GtkCellRenderer *toggle_renderer;
 static GtkWidget *check_button;
-
 
 static GList *list_digests;
 
@@ -1380,7 +1381,7 @@ create_window(void)
  */
 	options_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
 	gtk_box_set_homogeneous(GTK_BOX(options_box), FALSE);
-	gtk_box_set_spacing(GTK_BOX(options_box), 2);
+	gtk_box_set_spacing(GTK_BOX(options_box), 1);
 
 	for (gint i = 0; i < NR_OPTIONS; ++i)
 	{
@@ -1389,13 +1390,16 @@ create_window(void)
 		gtk_box_pack_start(GTK_BOX(options_box), options[i].widget, FALSE, FALSE, 10);
 	}
 
+	status_bar = gtk_statusbar_new();
+
 /* gtk_grid_attach(GtkGrid *grid, GtkWidget *widget, gint left, gint top, gint width, gint height); */
-	gtk_grid_attach(GTK_GRID(grid), image, 2, 1, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), image, 2, 2, 1, 1);
 	gtk_grid_attach(GTK_GRID(grid), list_box, 0, 2, 1, 1);
 	gtk_grid_attach(GTK_GRID(grid), options_box, 2, 3, 1, 1);
 	gtk_grid_attach(GTK_GRID(grid), label_choose_dir, 2, 4, 1, 1);
 	gtk_grid_attach(GTK_GRID(grid), button_choose_dir, 2, 5, 1, 1);
 	gtk_grid_attach_next_to(GTK_GRID(grid), button_start_scan, button_choose_dir, GTK_POS_RIGHT, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), status_bar, 0, 6, 1, 1);
 
 	gtk_widget_show_all(window);
 
