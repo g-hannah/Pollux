@@ -1027,6 +1027,8 @@ on_row_toggled(GtkCellRendererToggle *cell, gchar *path, gpointer data)
 	GtkTreeIter iter;
 	gboolean valid;
 
+	std::cerr << "on_row_toggled() called" << std::endl;
+
 	model = GTK_TREE_MODEL(data);
 	valid = gtk_tree_model_get_iter_from_string(model, &iter, path);
 
@@ -1116,7 +1118,6 @@ on_start_scan(GtkWidget *widget, gpointer data)
 	{
 		check_button = gtk_check_button_new_with_label("Select all");
 		g_assert(check_button);
-		g_signal_connect(check_button, "toggled", G_CALLBACK(on_row_toggled), (gpointer)store);
 
 		gtk_tree_store_append(store, &iter, NULL);
 		gtk_tree_store_set(store, &iter,
@@ -1152,7 +1153,6 @@ on_start_scan(GtkWidget *widget, gpointer data)
 
 			check_button = gtk_check_button_new_with_label("Select file");
 			g_assert(check_button);
-			g_signal_connect(check_button, "toggled", G_CALLBACK(on_row_toggled), (gpointer)store);
 
 			gtk_tree_store_append(store, &child, &iter);
 
@@ -1170,6 +1170,8 @@ on_start_scan(GtkWidget *widget, gpointer data)
 	view = gtk_tree_view_new();
 	renderer = gtk_cell_renderer_text_new();
 	toggle_renderer = gtk_cell_renderer_toggle_new();
+
+	g_signal_connect(toggle_renderer, "toggled", G_CALLBACK(on_row_toggled), (gpointer)store);
 
 	gtk_tree_view_set_model(GTK_TREE_VIEW(view), GTK_TREE_MODEL(store));
 	g_object_unref(G_OBJECT(store));
@@ -1386,11 +1388,11 @@ create_window(void)
 	}
 
 /* gtk_grid_attach(GtkGrid *grid, GtkWidget *widget, gint left, gint top, gint width, gint height); */
-	gtk_grid_attach(GTK_GRID(grid), image, 2, 0, 1, 1);
-	gtk_grid_attach(GTK_GRID(grid), list_box, 0, 1, 1, 1);
-	gtk_grid_attach(GTK_GRID(grid), options_box, 2, 2, 1, 1);
-	gtk_grid_attach(GTK_GRID(grid), label_choose_dir, 2, 3, 1, 1);
-	gtk_grid_attach(GTK_GRID(grid), button_choose_dir, 2, 4, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), image, 2, 1, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), list_box, 0, 2, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), options_box, 2, 3, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), label_choose_dir, 2, 4, 1, 1);
+	gtk_grid_attach(GTK_GRID(grid), button_choose_dir, 2, 5, 1, 1);
 	gtk_grid_attach_next_to(GTK_GRID(grid), button_start_scan, button_choose_dir, GTK_POS_RIGHT, 1, 1);
 
 	gtk_widget_show_all(window);
