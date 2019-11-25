@@ -49,11 +49,11 @@ void create_menu_bar(void);
 static GtkApplication *app;
 
 #define WIN_DEFAULT_WIDTH 500
-#define WIN_DEFAULT_HEIGHT 500
+#define WIN_DEFAULT_HEIGHT 400
 static GtkWidget *window;
 
-#define MAIN_GRID_ROW_SPACING 2
-#define MAIN_GRID_COL_SPACING 10
+#define MAIN_GRID_ROW_SPACING 1
+#define MAIN_GRID_COL_SPACING 8
 static GtkWidget *grid;
 
 static GtkWidget *menu_bar;
@@ -125,39 +125,17 @@ static GtkWidget *scrolling;
 static GtkTreeStore *store;
 static GtkWidget *view;
 static GtkCellRenderer *renderer;
+static GtkCellRenderer *toggle_renderer;
+static GtkWidget *check_button;
 
 
 static GList *list_digests;
 
-#if 0
-struct Grid_Attachment
-{
-	GtkWidget *widget;
-	gint width;
-	gint height;
-	gint left;
-	gint top;
-	gint grid_width;
-	gint grid_height;
-	gboolean next_to;
-	GtkWidget *sibling;
-	gint position;
-};
-
-#define NR_GRID_ATTACHMENTS 5
-struct Grid_Attachment grid_attachments[NR_GRID_ATTACHMENTS] =
-{
-	{ &image, PROG_ICON_WIDTH, PROG_ICON_HEIGHT, PROG_ICON_LEFT, PROG_ICON_TOP, 1, 1, FALSE, NULL, 0 },
-	{ &label_choose_dir, 10, 5, 2, 20, 1, 1, FALSE, NULL, 0 },
-	{ &button_choose_dir, 10, 5, 2, 21, 1, 1, FALSE, NULL 0 },
-	{ &button_start_scan, 5, 5, 3, 21, 1, 1, TRUE, &button_choose_dir, GTK_POS_RIGHT },
-	{ &options_box, 20, 30, 51, 2, 1, 1, FALSE, NULL, 0 }
-};
-#endif
-
 enum
 {
-	COL_PATH = 0,
+	COL_SELECT = 0,
+	COL_IS_ALL,
+	COL_PATH,
 	COL_SIZE,
 	COL_TIME_CREATED,
 	COL_TIME_MODIFIED,
@@ -171,6 +149,8 @@ struct Result_Columns
 
 struct Result_Columns result_columns[NR_COLUMNS] =
 {
+	{ "  Select  " },
+	{ " " },
 	{ "File" },
 	{ "       Size       " },
 	{ "       Created       " },
@@ -1005,6 +985,89 @@ on_choose_directory(GtkWidget *widget, gpointer data)
 }
 
 void
+on_select_all_for_digest(GtkWidget *widget, gpointer data)
+{
+	gchar *_digest = (gchar *)data;
+	gboolean _active = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget));
+
+	if (_active)
+		std::cerr << "User selected all for digest " << _digest << std::endl;
+	else
+		std::cerr << "User de-selected all for digest " << _digest << std::endl;
+
+	return;
+}
+
+void
+on_select_file(GtkWidget *widget, gpointer data)
+{
+	gchar *_name = (gchar *)data;
+	gboolean _active = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget));
+
+	if (_active)
+		std::cerr << "User selected file " << _name << std::endl;
+	else
+		std::cerr << "User de-selected file " << _name << std::endl;
+
+	return;
+}
+
+/**
+ * This is the callback for a toggle button cell renderer.
+ * The path to the node is in string format in PATH. We will
+ * pass the tree store in DATA.
+ */
+void
+on_row_toggled(GtkCellRendererToggle *cell, gchar *path, gpointer data)
+{
+	GtkTreeModel *model;
+	GtkTreeIter iter;
+	gboolean valid;
+
+	model = GTK_TREE_MODEL(data);
+	valid = gtk_tree_model_get_iter_from_string(model, &iter, path);
+
+	if (valid)
+	{
+		gboolean _all;
+		gtk_tree_model_get(model, &iter, COL_IS_ALL, &_all, -1);
+
+		if (_all == TRUE)
+		{
+			GtkTreeIter child;
+			gchar *filepath;
+
+			valid = TRUE;
+
+			std::cerr << "Selected all files:\n" << std::endl;
+
+			while (true)
+			{
+				gtk_tree_path_next(path);
+				valid = gtk_tree_model_get_iter_from_string(model, &iter, path);
+
+				if (!valid)
+					break;
+
+				gtk_tree_model_get(model, &iter, COL_PATH, &filepath, -1);
+
+				std::cerr << filepath << std::endl;
+			}
+
+			std::cerr << std::endl;
+			/* Get the file paths from all the children of this node */
+		}
+		else
+		{
+			gchar *filepath;
+
+			gtk_tree_model_get(model, &iter, COL_PATH, &filepath, -1);
+			std::cerr << "User selected file \"" << filepath << "\"" << std::endl;
+		}
+	}
+}
+
+void
 on_start_scan(GtkWidget *widget, gpointer data)
 {
 	if (CTX.scanning == TRUE)
@@ -1037,14 +1100,19 @@ on_start_scan(GtkWidget *widget, gpointer data)
 
 	clear_struct(&statb);
 
-	store = gtk_tree_store_new(NR_COLUMNS, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING);
+	store = gtk_tree_store_new(NR_COLUMNS, G_TYPE_POINTER, G_TYPE_BOOLEAN, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING);
 	g_assert(store);
 
 	for (std::map<gchar *,std::list<dNode> >::iterator map_iter = tree->dup_list.begin(); map_iter != tree->dup_list.end(); ++map_iter)
 	{
-		gtk_tree_store_append(store, &iter, NULL);
+		check_button = gtk_check_button_new_with_label("Select all");
+		g_assert(check_button);
+		g_signal_connect(check_button, "toggled", G_CALLBACK(on_select_all_for_digest), (gpointer)map_iter->first);
 
+		gtk_tree_store_append(store, &iter, NULL);
 		gtk_tree_store_set(store, &iter,
+				COL_SELECT, (gpointer)check_button,
+				COL_IS_ALL, TRUE,
 				COL_PATH, map_iter->first,
 				COL_SIZE, " ",
 				COL_TIME_CREATED, " ",
@@ -1073,9 +1141,15 @@ on_start_scan(GtkWidget *widget, gpointer data)
 			else
 				strcpy(__modified, "Unknown");
 
+			check_button = gtk_check_button_new_with_label("Select file");
+			g_assert(check_button);
+			g_signal_connect(check_button, "toggled", G_CALLBACK(on_select_file), (gpointer)list_iter->name);
+
 			gtk_tree_store_append(store, &child, &iter);
 
 			gtk_tree_store_set(store, &child,
+					COL_SELECT, (gpointer)check_button,
+					COL_IS_ALL, FALSE,
 					COL_PATH, list_iter->name,
 					COL_SIZE, __size,
 					COL_TIME_CREATED, __created,
@@ -1086,13 +1160,34 @@ on_start_scan(GtkWidget *widget, gpointer data)
 
 	view = gtk_tree_view_new();
 	renderer = gtk_cell_renderer_text_new();
+	toggle_renderer = gtk_cell_renderer_toggle_new();
 
 	gtk_tree_view_set_model(GTK_TREE_VIEW(view), GTK_TREE_MODEL(store));
 	g_object_unref(G_OBJECT(store));
 
-	g_object_set(G_OBJECT(renderer), "cell-background", "LightGrey", "cell-background-set", TRUE, NULL);
+	//g_object_set(G_OBJECT(renderer), "cell-background", "LightGrey", "cell-background-set", TRUE, NULL);
 
-	for (gint i = 0; i < NR_COLUMNS; ++i)
+/*
+ * First column is the check button. Second column is
+ * not visible in the view. It stores a boolean value
+ * that the toggle button callback func will use to
+ * know whether the row check corresponds to a single
+ * row that is a child of the hash digest, or whether
+ * it is the row with the digest, meaning we select
+ * all the rows that are children of it.
+ */
+	g_object_set(G_OBJECT(toggle_renderer), "activatable", FALSE, NULL);
+	gtk_tree_view_insert_column_with_attributes(GTK_TREE_VIEW(view),
+			-1, result_columns[0].name, toggle_renderer, 0, NULL);
+
+	g_object_set(G_OBJECT(renderer), "visible", FALSE, NULL);
+
+	gtk_tree_view_insert_column_with_attributes(GTK_TREE_VIEW(view),
+			-1, result_columns[1].name, renderer, 1, NULL);
+
+	g_object_set(G_OBJECT(renderer), "visible", TRUE, NULL);
+
+	for (gint i = 2; i < NR_COLUMNS; ++i)
 	{
 		gtk_tree_view_insert_column_with_attributes(GTK_TREE_VIEW(view),
 					-1, result_columns[i].name, renderer, "text", i, NULL);
