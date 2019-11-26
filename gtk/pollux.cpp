@@ -1027,6 +1027,8 @@ on_row_toggled(GtkCellRendererToggle *cell, gchar *path, gpointer data)
 	GtkTreeModel *model;
 	GtkTreeIter iter;
 	gboolean valid;
+	gboolean _active;
+	GtkWidget *_check;
 
 	std::cerr << "on_row_toggled() called" << std::endl;
 
@@ -1036,7 +1038,9 @@ on_row_toggled(GtkCellRendererToggle *cell, gchar *path, gpointer data)
 	if (valid)
 	{
 		gboolean _all;
-		gtk_tree_model_get(model, &iter, COL_IS_ALL, &_all, -1);
+		gtk_tree_model_get(model, &iter, COL_SELECT, &_check, COL_IS_ALL, &_all, -1);
+
+		_active = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(_check));
 
 		if (_all == TRUE)
 		{
@@ -1050,7 +1054,19 @@ on_row_toggled(GtkCellRendererToggle *cell, gchar *path, gpointer data)
 			gtk_tree_model_get(model, &iter, COL_PATH, &_digest, -1);
 			_path = gtk_tree_path_new_from_string(path);
 
-			std::cerr << "Selected all files with digest \"" << _digest << "\":" << std::endl;
+			if (_active)
+			{
+				gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(_check), FALSE);
+				gtk_cell_renderer_toggle_set_active(GTK_CELL_RENDERER_TOGGLE(cell), FALSE);
+				std::cerr << "User de-selected all files with digest \"" << _digest << "\":" << std::endl;
+			}
+			else
+			{
+				gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(_check), TRUE);
+				gtk_cell_renderer_toggle_set_active(GTK_CELL_RENDERER_TOGGLE(cell), TRUE);
+				std::cerr << "User selected all files with digest \"" << _digest << "\":" << std::endl;
+			}
+
 
 			gtk_tree_path_down(_path);
 
@@ -1062,7 +1078,18 @@ on_row_toggled(GtkCellRendererToggle *cell, gchar *path, gpointer data)
 				if (!valid)
 					break;
 
-				gtk_tree_model_get(model, &iter, COL_PATH, &filepath, -1);
+				gtk_tree_model_get(model, &iter, COL_SELECT, &_check, COL_PATH, &filepath, -1);
+
+				if (_active)
+				{
+					gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(_check), FALSE);
+					gtk_cell_renderer_toggle_set_active(GTK_CELL_RENDERER_TOGGLE(cell), FALSE);
+				}
+				else
+				{
+					gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(_check), TRUE);
+					gtk_cell_renderer_toggle_set_active(GTK_CELL_RENDERER_TOGGLE(cell), TRUE);
+				}
 
 				std::cerr << filepath << std::endl;
 				gtk_tree_path_next(_path);
@@ -1074,9 +1101,22 @@ on_row_toggled(GtkCellRendererToggle *cell, gchar *path, gpointer data)
 		else
 		{
 			gchar *filepath;
+			GtkWidget *_check_box;
 
-			gtk_tree_model_get(model, &iter, COL_PATH, &filepath, -1);
-			std::cerr << "User selected file \"" << filepath << "\"" << std::endl;
+			gtk_tree_model_get(model, &iter, COL_SELECT, &_check_box, COL_PATH, &filepath, -1);
+
+			if (_active)
+			{
+				gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(_check), FALSE);
+				gtk_cell_renderer_toggle_set_active(GTK_CELL_RENDERER_TOGGLE(cell), FALSE);
+				std::cerr << "User de-selected file \"" << filepath << "\"" << std::endl;
+			}
+			else
+			{
+				gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(_check), TRUE);
+				gtk_cell_renderer_toggle_set_active(GTK_CELL_RENDERER_TOGGLE(cell), TRUE);
+				std::cerr << "User selected file \"" << filepath << "\"" << std::endl;
+			}
 		}
 	}
 }
@@ -1119,7 +1159,7 @@ on_start_scan(GtkWidget *widget, gpointer data)
 
 	for (std::map<gchar *,std::list<dNode> >::iterator map_iter = tree->dup_list.begin(); map_iter != tree->dup_list.end(); ++map_iter)
 	{
-		check_button = gtk_check_button_new_with_label("Select all");
+		check_button = gtk_check_button_new();
 		g_assert(check_button);
 
 		gtk_tree_store_append(store, &iter, NULL);
@@ -1154,7 +1194,7 @@ on_start_scan(GtkWidget *widget, gpointer data)
 			else
 				strcpy(__modified, "Unknown");
 
-			check_button = gtk_check_button_new_with_label("Select file");
+			check_button = gtk_check_button_new();
 			g_assert(check_button);
 
 			gtk_tree_store_append(store, &child, &iter);
@@ -1174,7 +1214,6 @@ on_start_scan(GtkWidget *widget, gpointer data)
 	renderer = gtk_cell_renderer_text_new();
 	toggle_renderer = gtk_cell_renderer_toggle_new();
 
-	g_object_set(G_OBJECT(toggle_renderer), "activatable", TRUE, NULL);
 	g_signal_connect(toggle_renderer, "toggled", G_CALLBACK(on_row_toggled), (gpointer)store);
 
 	gtk_tree_view_set_model(GTK_TREE_VIEW(view), GTK_TREE_MODEL(store));
@@ -1206,7 +1245,7 @@ on_start_scan(GtkWidget *widget, gpointer data)
 	}
 
 	results_window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-	gtk_window_set_title(GTK_WINDOW(results_window), "Pollux -- Duplicate File Results");
+	gtk_window_set_title(GTK_WINDOW(results_window), "Duplicate Files");
 	gtk_widget_set_size_request(results_window, SCROLLING_WINDOW_WIDTH, SCROLLING_WINDOW_HEIGHT);
 	scrolling = gtk_scrolled_window_new(NULL, NULL);
 	gtk_widget_set_size_request(scrolling, SCROLLING_WINDOW_WIDTH, SCROLLING_WINDOW_HEIGHT);
