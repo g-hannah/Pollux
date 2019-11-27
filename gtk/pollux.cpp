@@ -1372,7 +1372,7 @@ create_window(void)
 	image_small = gtk_image_new_from_pixbuf(icon_pixbuf_small);
 
 	list_box = gtk_list_box_new();
-	gtk_widget_set_size_request(list_box, 100, 100);
+	gtk_widget_set_size_request(list_box, 120, 100);
 
 #if 0
 	stats_nr_files = gtk_label_new("#Files");
