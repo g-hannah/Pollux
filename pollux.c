@@ -17,6 +17,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#define error(m) fprintf(stderr, "%s: %s (%s)\n", __func__, (m), strerror(errno))
+
 #define MAXLINE		1024
 #define BLK_SIZE	8192
 #define TMP_FILE	"/tmp/.dup_files.txt"
@@ -25,6 +27,17 @@
 #define BANNER_COL	"\e[38;5;202m"
 #define HIGHLIGHT_COL	"\e[38;5;246m"
 #define BUILD			"2.0.4"
+
+#define CRFLAGS O_RDWR|O_CREAT|O_TRUNC
+#define CRMODE S_IRUSR|S_IWUSR
+
+struct file
+{
+	const char *path;
+	int fd;
+};
+
+struct file outfile = {0};
 
 static char *hexdigits = "0123456789abcdef";
 
@@ -46,6 +59,7 @@ typedef struct Node Node;
 #define UF_NO_DELETE			0x2
 #define UF_QUIET_MODE			0x4
 #define	UF_DEBUG_MODE			0x8
+#define UF_TO_FILE 0x10
 
 static uint16_t user_options;
 #define flag_is_set(f) (user_options & (f))
@@ -58,6 +72,15 @@ static uint16_t user_options;
 #define __hot __attribute__((hot))
 #define __cold __attribute__((cold))
 #define __noret __attribute__((__noreturn__))
+
+#define write_file(data)\
+do {\
+	if (flag_is_set(UF_TO_FILE))\
+	{\
+		ssize_t n __attribute__((unused));\
+		n = write(outfile.fd, data, strlen(data));\
+	}\
+} while (0)
 
 struct stat	cur_file_stats;
 Node				*root = NULL;
@@ -184,6 +207,9 @@ main(int argc, char *argv[])
 		}
 	}
 
+/*
+ * Do this in get_options() now.
+ *
 	if (flag_is_set(UF_QUIET_MODE))
 	{
 		int		fd = -1;
@@ -202,7 +228,7 @@ main(int argc, char *argv[])
 		close(fd);
 		fd = -1;
 	}
-
+*/
 	strncpy(path, argv[1], strlen(argv[1]));
 	path[strlen(argv[1])] = 0;
 
@@ -214,17 +240,20 @@ main(int argc, char *argv[])
 	r = scan_dirs(path);
 	time(&end);
 
+	lseek(tmp_fd, 0, SEEK_SET);
+
 	if (!flag_is_set(UF_NO_DELETE))
 	{
 		lseek(tmp_fd, 0, SEEK_SET);
 		while (fgets(line_buf, MAXLINE, tmp_fp) != NULL)
-	  {
+	  	{
 			strip_crnl(line_buf);
 			unlink(line_buf);
 		}
 		unlink(TMP_FILE);
 	}
 
+	// unlink(TMP_FILE);
 	debug("printing stats");
 	print_stats();
 
@@ -970,13 +999,48 @@ get_options(int argc, char *argv[])
 		else if (strcmp("--quiet", argv[i]) == 0
 			|| strcmp("-q", argv[i]) == 0)
 		{
-			user_options |= UF_QUIET_MODE;
+			int fd = -1;
+			if ((fd = open("/dev/null", O_RDONLY)) == -1)
+			{
+				fprintf(stderr, "Failed to open /dev/null\n");
+				goto fail;
+			}
+			/*
+			 * dup2(new_fd, old_fd);
+			 */
+			if (STDOUT_FILENO != fd)
+			{
+				if (dup2(fd, STDOUT_FILENO) != 0)
+					goto fail;
+			}
+			if (STDERR_FILENO != fd)
+			{
+				if (dup2(fd, STDERR_FILENO) != 0)
+					goto fail;
+			}
 		}
 		else
 		if (strcmp("--debug", argv[i]) == 0
 			|| strcmp("-D", argv[i]) == 0)
 		{
 			user_options |= UF_DEBUG_MODE;
+		}
+		else
+		if (strcmp("--out", argv[i]) == 0)
+		{
+			if ((i + 1) >= argc)
+			{
+				fprintf(stderr, "--out requires an argument\n");
+				goto fail;
+			}
+			++i;
+			outfile.path = strdup(argv[i]);
+			if ((outfile.fd = open(argv[i], CRFLAGS, CRMODE)) == -1)
+			{
+				error("failed to open out file");
+				goto fail;
+			}
+			user_options |= UF_TO_FILE;
 		}
 		else
 		{
@@ -1306,9 +1370,15 @@ print_and_decide(char *hash, char *f1, char *f2, FILE *fp)
 			return -1;
 
 		if (choice == 1)
+		{
 			fprintf(fp, "%s\n", f1);
+			write_file(f1);
+		}
 		else
+		{
 			fprintf(fp, "%s\n", f2);
+			write_file(f2);
+		}
 
 		fprintf(stdout,
 			"%s _\e[m %s%.*s%s\n"
