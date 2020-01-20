@@ -72,15 +72,6 @@ static uint16_t user_options;
 #define __cold __attribute__((cold))
 #define __noret __attribute__((__noreturn__))
 
-#define write_file(data)\
-do {\
-	if (flag_is_set(UF_TO_FILE))\
-	{\
-		ssize_t n __attribute__((unused));\
-		n = write(outfile.fd, data, strlen(data));\
-	}\
-} while (0)
-
 struct stat cur_file_stats;
 Node *root = NULL;
 int files_scanned = 0;
@@ -91,11 +82,12 @@ uint64_t used_bytes = 0;
 uint64_t wasted_bytes = 0;
 time_t start = 0, end = 0;
 char *path = NULL;
-static char program_name[64];
+//static char program_name[64];
 struct rlimit rlims;
 char **user_blacklist = NULL;
+static int istty = 1;
 
-static int close_start = 3;
+//static int close_start = 3;
 
 const char *illegal_terms[] = 
 {
@@ -151,6 +143,7 @@ static void pollux_init(void) __attribute__((constructor));
 static void pollux_fini(void) __attribute__((destructor));
 static int get_options(int, char *[]) __nonnull((2)) __wur;
 static void print_stats(void);
+static int divert_streams(int) __wur;
 
 static void print_pollux_logo(void);
 
@@ -1011,23 +1004,21 @@ get_options(int argc, char *argv[])
 			|| strcmp("-q", argv[i]) == 0)
 		{
 			int fd = -1;
-			if ((fd = open("/dev/null", O_RDONLY)) == -1)
+
+			if (!flag_is_set(UF_TO_FILE))
 			{
-				error("failed to open /dev/null");
-				goto fail;
-			}
-			/*
-			 * dup2(new_fd, old_fd);
-			 */
-			if (STDOUT_FILENO != fd)
-			{
-				if (dup2(fd, STDOUT_FILENO) != 0)
+				if ((fd = open("/dev/null", O_RDONLY)) == -1)
+				{
+					error("failed to open /dev/null");
 					goto fail;
-			}
-			if (STDERR_FILENO != fd)
-			{
-				if (dup2(fd, STDERR_FILENO) != 0)
+				}
+
+				if (divert_streams(fd) != 0)
 					goto fail;
+
+				close(fd);
+
+				istty = 0;
 			}
 		}
 		else
@@ -1039,19 +1030,27 @@ get_options(int argc, char *argv[])
 		else
 		if (strcmp("--out", argv[i]) == 0)
 		{
+			int fd = -1;
+
 			if ((i + 1) >= argc)
 			{
 				fprintf(stderr, "--out requires an argument\n");
 				goto fail;
 			}
 			++i;
-			if ((outfile.fd = open(argv[i], CRFLAGS, CRMODE)) == -1)
+
+			if ((fd = open(argv[i], CRFLAGS, CRMODE)) == -1)
 			{
 				error("failed to open out file");
 				goto fail;
 			}
-			fprintf(stdout, "opened outfile on fd %d\n", outfile.fd);
+
+			if (divert_streams(fd) != 0)
+				goto fail;
+
+			close(fd);
 			user_options |= UF_TO_FILE;
+			istty = 0;
 		}
 		else
 		{
@@ -1100,7 +1099,7 @@ print_stats(void)
 
 	time_taken = (end - start);
 
-	if (UF_QUIET_MODE)
+	if (flag_is_set(UF_QUIET_MODE))
 	{
 		char	*home_dir = NULL;
 
@@ -1109,6 +1108,7 @@ print_stats(void)
 		if (quiet_out && home_dir)
 			sprintf(quiet_out, "%s/pollux_scan_results.txt", home_dir);
 		fd = open(quiet_out, CRFLAGS, CRMODE);
+		free(quiet_out);
 	}
 
 	if (time_taken > 3599)
@@ -1383,7 +1383,6 @@ int
 print_and_decide(char *hash, char *f1, char *f2, FILE *fp)
 {
 	int		choice = 0;
-	static char fbuffer[1024];
 
 	if (!flag_is_set(UF_NO_DELETE))
 	{
@@ -1421,27 +1420,16 @@ print_and_decide(char *hash, char *f1, char *f2, FILE *fp)
 	}
 	else
 	{
-		sprintf(fbuffer,
-			" _ %s\n"
-			"|_ %s\n"
-			"|\n"
-			"`--->[%s]\n\n",
-			f1,
-			f2,
-			hash);
-
-		write_file(fbuffer);
-
 		fprintf(stdout,
 			"%s _\e[m %.*s\n"
 			"%s|_\e[m %.*s\n"
 			"%s|\e[m\n"
 			"%s`--->\e[m[\e[38;5;10m%s\e[m]\n\n",
 			ARROW_COL,
-			max_col,
+			istty ? max_col : 1024,
 			f1,
 			ARROW_COL,
-			max_col,
+			istty ? max_col : 1024,
 			f2,
 			ARROW_COL,
 			ARROW_COL,
@@ -1505,6 +1493,7 @@ get_sha256_file(char *fname)
 	return(NULL);
 }
 
+#if 0
 void
 close_excess_fds(int limit)
 {
@@ -1515,6 +1504,7 @@ close_excess_fds(int limit)
 
 	return;
 }
+#endif
 
 void
 strip_crnl(char *line)
@@ -1592,7 +1582,7 @@ display_usage(const int exit_status)
 		"Example:\n\n"
 		"pollux --nohidden --blacklist \"/Images\",\"/Projects\"\n\n"
 		"Ignore hidden files and do not descend into directories \"Images\" nor \"Projects\"\n",
-		program_name);
+		PROG_NAME);
 
 	exit(exit_status);
 }
@@ -1644,6 +1634,30 @@ contains_blacklisted(const char *path)
 		{
 			if (strstr(path, user_blacklist[i]))
 				return 1;
+		}
+	}
+
+	return 0;
+}
+
+int
+divert_streams(int fd)
+{
+	if (STDOUT_FILENO != fd)
+	{
+		if (dup2(fd, STDOUT_FILENO) < 0)
+		{
+			error("failed to divert STDOUT to fd");
+			return -1;
+		}
+	}
+
+	if (STDERR_FILENO != fd)
+	{
+		if (dup2(fd, STDERR_FILENO) < 0)
+		{
+			error("failed to divert STDERR to fd");
+			return -1;
 		}
 	}
 
