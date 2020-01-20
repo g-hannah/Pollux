@@ -43,29 +43,26 @@ static char *hexdigits = "0123456789abcdef";
 
 struct Node
 {
-	int			array;
-	char		*name;
+	int	array;
+	char	*name;
 	size_t	size;
 	struct	Node	*l;
 	struct	Node	*r;
 	struct	Node	*s;
-	char		hash[HASH_SIZE];
+	char	hash[HASH_SIZE];
 };
 
 typedef struct Node Node;
 
 /* option flags */
-#define UF_IGNORE_HIDDEN	0x1
-#define UF_NO_DELETE			0x2
-#define UF_QUIET_MODE			0x4
-#define	UF_DEBUG_MODE			0x8
+#define UF_IGNORE_HIDDEN 0x1
+#define UF_NO_DELETE 0x2
+#define UF_QUIET_MODE 0x4
+#define	UF_DEBUG_MODE 0x8
 #define UF_TO_FILE 0x10
 
 static uint16_t user_options;
 #define flag_is_set(f) (user_options & (f))
-
-#define for_each_arg(i) \
-	for ((i) = 0; (i) < argc; ++(i))
 
 #define clear_struct(s) memset((s), 0, sizeof((*s)))
 
@@ -82,19 +79,22 @@ do {\
 	}\
 } while (0)
 
-struct stat	cur_file_stats;
-Node				*root = NULL;
-int					files_scanned = 0;
-int					dup_files = 0;
-int					tmp_fd = -1;
-FILE				*tmp_fp = NULL;
-uint64_t		used_bytes = 0;
-uint64_t		wasted_bytes = 0;
-time_t			start = 0, end = 0;
-char				*path = NULL;
+struct stat cur_file_stats;
+Node *root = NULL;
+int files_scanned = 0;
+int dup_files = 0;
+int tmp_fd = -1;
+FILE *tmp_fp = NULL;
+uint64_t used_bytes = 0;
+uint64_t wasted_bytes = 0;
+time_t start = 0, end = 0;
+char *path = NULL;
 static char program_name[64];
-struct rlimit	rlims;
-char				**user_blacklist = NULL;
+struct rlimit rlims;
+char **user_blacklist = NULL;
+
+static int close_start = 3;
+
 const char *illegal_terms[] = 
   {
 	"/sys",
@@ -134,7 +134,7 @@ static int scan_dirs(char *) __nonnull((1)) __wur;
 static int print_and_decide(char *, char *, char *, FILE *) __nonnull((1,2,3,4)) __wur;
 static int remove_which(char *, char *) __nonnull((1,2)) __wur;
 static unsigned char *get_sha256_file(char *) __nonnull((1)) __wur;
-static void close_excess_fds(int, int);
+//static void close_excess_fds(int);
 static void strip_crnl(char *) __nonnull((1));
 static inline char *hexlify(unsigned char *, size_t) __nonnull((1)) __wur;
 static void display_usage(const int) __noret;
@@ -379,7 +379,7 @@ scan_dirs(char *path)
 			cur_file_name[strlen(dinf->d_name)] = 0;
 
 			closedir(dp);
-			close_excess_fds(flag_is_set(UF_NO_DELETE) ? 3 : (tmp_fd + 1), rlims.rlim_cur);
+			//close_excess_fds(rlims.rlim_cur);
 
 			if (scan_dirs(path) < 0)
 				goto fail;
@@ -425,7 +425,7 @@ scan_dirs(char *path)
 			closedir(dp);
 			dp = NULL;
 
-			close_excess_fds(flag_is_set(UF_NO_DELETE) ? 3 : (tmp_fd + 1), rlims.rlim_cur);
+			//close_excess_fds(rlims.rlim_cur);
 
 			debug("descending into %s", path);
 
@@ -930,6 +930,18 @@ pollux_fini(void)
 		free(block);
 		block = NULL;
 	}
+
+	if (user_blacklist)
+	{
+		int i;
+		for (i = 0; user_blacklist[i] != NULL; ++i)
+		{
+			free(user_blacklist[i]);
+			user_blacklist[i] = NULL;
+		}
+
+		free(user_blacklist);
+	}
 }
 
 int
@@ -938,7 +950,7 @@ get_options(int argc, char *argv[])
 	int		i = 0, j = 0;
 	int		blist_idx = 0;
 
-	for_each_arg(i)
+	for(i = 0; i < argc; ++i)
 	{
 		while (i < argc
 			&& strncmp("-", argv[i], 1) != 0
@@ -1002,7 +1014,7 @@ get_options(int argc, char *argv[])
 			int fd = -1;
 			if ((fd = open("/dev/null", O_RDONLY)) == -1)
 			{
-				fprintf(stderr, "Failed to open /dev/null\n");
+				error("failed to open /dev/null");
 				goto fail;
 			}
 			/*
@@ -1034,12 +1046,12 @@ get_options(int argc, char *argv[])
 				goto fail;
 			}
 			++i;
-			outfile.path = strdup(argv[i]);
 			if ((outfile.fd = open(argv[i], CRFLAGS, CRMODE)) == -1)
 			{
 				error("failed to open out file");
 				goto fail;
 			}
+			fprintf(stdout, "opened outfile on fd %d\n", outfile.fd);
 			user_options |= UF_TO_FILE;
 		}
 		else
@@ -1048,7 +1060,17 @@ get_options(int argc, char *argv[])
 		}
 	}
 
-	return(0);
+#if 0
+/*
+ * For close_excess_fds()
+ */
+	if (flag_is_set(UF_QUIET_MODE))
+		++close_start;
+	if (flag_is_set(UF_TO_FILE))
+		++close_start;
+#endif
+
+	return 0;
 
 	fail:
 	if (user_blacklist)
@@ -1080,15 +1102,15 @@ print_stats(void)
 	time_taken = (end - start);
 
 	if (UF_QUIET_MODE)
-	  {
+	{
 		char	*home_dir = NULL;
 
 		home_dir = getenv("HOME");
 		quiet_out = calloc(MAXLINE, 1);
 		if (quiet_out && home_dir)
 			sprintf(quiet_out, "%s/pollux_scan_results.txt", home_dir);
-		fd = open(quiet_out, O_RDWR|O_CREAT|O_TRUNC, S_IRUSR|S_IWUSR);
-	  }
+		fd = open(quiet_out, CRFLAGS, CRMODE);
+	}
 
 	if (time_taken > 3599)
 	  {
@@ -1362,6 +1384,7 @@ int
 print_and_decide(char *hash, char *f1, char *f2, FILE *fp)
 {
 	int		choice = 0;
+	static char fbuffer[1024];
 
 	if (!flag_is_set(UF_NO_DELETE))
 	{
@@ -1372,12 +1395,10 @@ print_and_decide(char *hash, char *f1, char *f2, FILE *fp)
 		if (choice == 1)
 		{
 			fprintf(fp, "%s\n", f1);
-			write_file(f1);
 		}
 		else
 		{
 			fprintf(fp, "%s\n", f2);
-			write_file(f2);
 		}
 
 		fprintf(stdout,
@@ -1401,6 +1422,17 @@ print_and_decide(char *hash, char *f1, char *f2, FILE *fp)
 	}
 	else
 	{
+		sprintf(fbuffer,
+			" _ %s\n"
+			"|_ %s\n"
+			"|\n"
+			"`--->[%s]\n\n",
+			f1,
+			f2,
+			hash);
+
+		write_file(fbuffer);
+
 		fprintf(stdout,
 			"%s _\e[m %.*s\n"
 			"%s|_\e[m %.*s\n"
@@ -1475,11 +1507,11 @@ get_sha256_file(char *fname)
 }
 
 void
-close_excess_fds(int start, int limit)
+close_excess_fds(int limit)
 {
-	int		i;
+	int i;
 
-	for (i = start; i < limit; ++i)
+	for (i = close_start; i < limit; ++i)
 		close(i);
 
 	return;
