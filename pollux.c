@@ -17,6 +17,9 @@
 #include <time.h>
 #include <unistd.h>
 
+#define PROG_NAME "pollux"
+#define PROG_BUILD "2.0.4"
+
 #define error(m) fprintf(stderr, "%s: %s (%s)\n", __func__, (m), strerror(errno))
 
 #define MAXLINE		1024
@@ -26,7 +29,6 @@
 #define ARROW_COL	"\e[38;5;13m"
 #define BANNER_COL	"\e[38;5;202m"
 #define HIGHLIGHT_COL	"\e[38;5;246m"
-#define BUILD			"2.0.4"
 
 #define CRFLAGS O_RDWR|O_CREAT|O_TRUNC
 #define CRMODE S_IRUSR|S_IWUSR
@@ -96,7 +98,7 @@ char **user_blacklist = NULL;
 static int close_start = 3;
 
 const char *illegal_terms[] = 
-  {
+{
 	"/sys",
 	"/usr",
 	"/bin",
@@ -157,11 +159,8 @@ main(int argc, char *argv[])
 {
 	int 	r = 0;
 
-	strncpy(program_name, argv[0], strlen(argv[0]));
-	program_name[strlen(argv[0])] = 0;
-
 	if (argc < 2)
-			display_usage(EXIT_FAILURE);
+		display_usage(EXIT_FAILURE);
 	else
 	if (get_options(argc, argv) < 0)
 		goto fail;
@@ -177,13 +176,13 @@ main(int argc, char *argv[])
 	 */
 	if (isatty(STDOUT_FILENO))
 	{
-			if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &winsz) < 0)
-		  {
-				log_err("main: ioctl TIOCGWINSZ error");
-				goto fail;
-			}
+		if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &winsz) < 0)
+		{
+			log_err("main: ioctl TIOCGWINSZ error");
+			goto fail;
+		}
 
-			max_col = winsz.ws_col - 6;
+		max_col = winsz.ws_col - 6;
 	}
 	 
 	if (!flag_is_set(UF_NO_DELETE))
@@ -1582,12 +1581,17 @@ display_usage(const int exit_status)
 {
 	fprintf(stderr,
 		"\n%s </path/to/directory> [options]\n\n"
-		"-B,--blacklist		Blacklist keywords from scan\n"
-		"-N,--nodelete		Don't delete the duplicate files\n"
-		"--nohidden		Ignore hidden files (begin with '.')\n"
-		"-q,--quiet		Only output final stats\n"
-		"-D,--debug		Run in debug mode\n"
-		"-h,--help		Display this information menu\n",
+		"-B,--blacklist <term> [,<term>]      Blacklist keywords from scan\n"
+		"-N,--nodelete                        Don't delete the duplicate files\n"
+		"--nohidden                           Ignore hidden files (begin with '.')\n"
+		"--out <file>                         Print results to output file\n"
+		"-q,--quiet                           Only output final stats\n"
+		"-D,--debug                           Run in debug mode\n"
+		"-h,--help                            Display this information menu\n"
+		"\n\n"
+		"Example:\n\n"
+		"pollux --nohidden --blacklist \"/Images\",\"/Projects\"\n\n"
+		"Ignore hidden files and do not descend into directories \"Images\" nor \"Projects\"\n",
 		program_name);
 
 	exit(exit_status);
@@ -1610,7 +1614,7 @@ print_pollux_logo(void)
 			"\n"
 			" v%s\n\n",
 			BANNER_COL,
-			BUILD);
+			PROG_BUILD);
 
 	return;
 }
